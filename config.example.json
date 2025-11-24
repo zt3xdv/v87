@@ -1,0 +1,9 @@
+{
+  "port": 3000,
+  "secretKey": "v87-change-me-in-prod",
+  "limits": {
+    "maxServers": 3,
+    "maxRam": 1024,
+    "maxStorage": 1024
+  }
+}

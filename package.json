@@ -1,0 +1,31 @@
+{
+  "name": "v87",
+  "version": "1.0.0",
+  "main": "nodejs.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "lib": "lib"
+  },
+  "scripts": {
+    "start": "node panel/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "panel",
+    "web",
+    "v86",
+    "v87"
+  ],
+  "author": "zt3xdv",
+  "license": "ISC",
+  "description": "v87 is a web panel and containers using v86, a web/node x86 emulator.",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "ejs": "^3.1.10",
+    "express": "^5.1.0",
+    "fs-extra": "^11.3.2",
+    "multer": "^2.0.2",
+    "socket.io": "^4.8.1"
+  }
+}
