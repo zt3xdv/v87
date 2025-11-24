@@ -156,13 +156,17 @@ app.post('/api/server/create', requireAuth, async (req, res) => {
     res.json({ success: true, server });
 });
 
-app.get('/api/server/:id', requireAuth, (req, res) => {
+app.get('/api/server/:id', requireAuth, async (req, res) => {
     const server = db.getServer(req.params.id);
     if (!server) return res.status(404).json({ error: 'Server not found' });
     if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
     
+    const owner = db.findUserById(server.ownerId);
+    const serverDir = path.join(USER_DATA_DIR, owner.username, 'servers', server.id, 'root');
+    const diskUsed = await getDirSize(serverDir);
+
     res.json({ 
-        server, 
+        server: { ...server, diskUsed }, 
         isRunning: runningVMs.has(server.id) 
     });
 });
@@ -181,15 +185,39 @@ app.post('/api/server/:id/start', requireAuth, (req, res) => {
     const vmRunner = path.join(__dirname, 'vm_runner.js');
     const child = spawn('node', [vmRunner, server.ram.toString(), 'images/linux.iso', 'root'], {
         cwd: serverDir,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     });
     
-    runningVMs.set(serverId, { process: child });
+    runningVMs.set(serverId, { process: child, lastDiskUsage: 0, lastDiskCheck: 0 });
     
     child.stdout.on('data', (data) => {
         io.to(serverId).emit('term-data', data.toString());
     });
     
+    child.on('message', async (msg) => {
+        if (msg.type === 'stats') {
+            const vm = runningVMs.get(serverId);
+            if (vm) {
+                // Update disk stats every 10 seconds
+                const now = Date.now();
+                if (now - vm.lastDiskCheck > 10000) {
+                    try {
+                        const rootDir = path.join(USER_DATA_DIR, owner.username, 'servers', serverId, 'root');
+                        vm.lastDiskUsage = await getDirSize(rootDir);
+                        vm.lastDiskCheck = now;
+                    } catch (e) {}
+                }
+                
+                io.to(serverId).emit('stats', {
+                    ram: msg.ram,
+                    disk: vm.lastDiskUsage,
+                    netRx: msg.netRx,
+                    netTx: msg.netTx
+                });
+            }
+        }
+    });
+
     child.on('close', (code) => {
         runningVMs.delete(serverId);
         io.to(serverId).emit('vm-status', 'stopped');
@@ -209,6 +237,49 @@ app.post('/api/server/:id/stop', requireAuth, (req, res) => {
         vm.process.kill();
     }
     res.json({ status: 'stopped' });
+});
+
+app.post('/api/server/:id/startup', requireAuth, async (req, res) => {
+    const serverId = req.params.id;
+    const { ram, diskSize } = req.body;
+    
+    const server = db.getServer(serverId);
+    if (!server) return res.status(404).json({ error: 'Not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+
+    if (runningVMs.has(serverId)) return res.status(400).json({ error: 'Cannot update startup settings while server is running' });
+
+    // Validate RAM limit
+    if (req.user.role !== 'admin') {
+        const servers = db.getUserServers(req.user.id);
+        const totalRam = servers.reduce((acc, s) => acc + (s.id === serverId ? 0 : s.ram), 0);
+        const newRam = parseInt(ram);
+        
+        if (totalRam + newRam > LIMITS.maxRam) {
+            return res.status(400).json({ error: `Max ${LIMITS.maxRam}MB RAM limit reached` });
+        }
+    }
+
+    const updates = {
+        ram: parseInt(ram),
+        diskSize: parseInt(diskSize) // We update the record, though physical resize logic isn't implemented yet
+    };
+    
+    const updated = db.updateServer(serverId, updates);
+    res.json({ success: true, server: updated });
+});
+
+app.post('/api/server/:id/settings', requireAuth, (req, res) => {
+    const serverId = req.params.id;
+    const { name, description } = req.body;
+    
+    const server = db.getServer(serverId);
+    if (!server) return res.status(404).json({ error: 'Not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+
+    const updates = { name, description };
+    const updated = db.updateServer(serverId, updates);
+    res.json({ success: true, server: updated });
 });
 
 app.get('/api/server/:id/files', requireAuth, async (req, res) => {

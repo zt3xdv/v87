@@ -24,6 +24,8 @@ export function NodeNetworkAdapter(bus, config)
     this.doh_server = config.doh_server || "8.8.8.8";
     this.tcp_conn = {};
     this.eth_encoder_buf = create_eth_encoder_buf();
+    
+    this.stats = { rx: 0, tx: 0 };
 
     this.bus.register("net" + this.id + "-mac", function(mac) {
         this.vm_mac = new Uint8Array(mac.split(":").map(function(x) { return parseInt(x, 16); }));
@@ -110,10 +112,12 @@ NodeNetworkAdapter.prototype.tcp_probe = function(port)
 
 NodeNetworkAdapter.prototype.send = function(data)
 {
+    this.stats.tx += data.length;
     handle_fake_networking(data, this);
 };
 
 NodeNetworkAdapter.prototype.receive = function(data)
 {
+    this.stats.rx += data.length;
     this.bus.send("net" + this.id + "-receive", new Uint8Array(data));
 };

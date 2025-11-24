@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.2.1/css/xterm.css" />
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
     <link rel="stylesheet" href="/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>eruda.init();</script>
 </head>
 <body>
     <nav class="navbar">
@@ -134,14 +136,111 @@
             </div>
         </div>
 
+        <div class="d-flex gap-2 mb-3 p-2 card" style="background: rgba(255,255,255,0.05);">
+            <button class="btn btn-sm btn-secondary" id="tab-console">Console</button>
+            <button class="btn btn-sm btn-secondary" id="tab-files">Files</button>
+            <button class="btn btn-sm btn-secondary" id="tab-startup">Startup</button>
+            <button class="btn btn-sm btn-secondary" id="tab-settings">Settings</button>
+        </div>
+
         <div id="server-content">
             <!-- Sub-view content injected here -->
         </div>
     </template>
 
+    <template id="server-startup-template">
+        <div class="card">
+            <div class="card-header">Startup Configuration</div>
+            <div class="card-body">
+                 <div id="startup-error" class="alert alert-danger hidden"></div>
+                 <div id="startup-success" class="alert alert-success hidden">Saved!</div>
+                 <form id="startup-form">
+                    <div class="form-group">
+                        <label>RAM (MB)</label>
+                        <input type="number" id="su-ram" class="form-control" required>
+                    </div>
+                     <div class="form-group">
+                        <label>Disk Size (MB)</label>
+                        <input type="number" id="su-disk" class="form-control">
+                    </div>
+                    <div class="alert alert-warning">Server must be stopped to change startup settings.</div>
+                    <button type="submit" class="btn btn-accent">Save Changes</button>
+                 </form>
+            </div>
+        </div>
+    </template>
+
+    <template id="server-settings-template">
+        <div class="card mb-4">
+            <div class="card-header">General Settings</div>
+            <div class="card-body">
+                 <div id="settings-success" class="alert alert-success hidden">Saved!</div>
+                 <form id="settings-form">
+                    <div class="form-group">
+                        <label>Server Name</label>
+                        <input type="text" id="st-name" class="form-control" required>
+                    </div>
+                     <div class="form-group">
+                        <label>Description</label>
+                        <input type="text" id="st-desc" class="form-control">
+                    </div>
+                    <button type="submit" class="btn btn-accent">Save Changes</button>
+                 </form>
+            </div>
+        </div>
+        
+        <div class="card border-danger">
+            <div class="card-header text-danger">Danger Zone</div>
+            <div class="card-body">
+                <p>Deleting your server is irreversible.</p>
+                <button id="btn-delete-server" class="btn btn-danger">Delete Server</button>
+            </div>
+        </div>
+    </template>
+
     <template id="server-console-template">
-        <div class="card" style="border:none; background:transparent; box-shadow:none;">
-            <div id="terminal"></div>
+        <div class="card mb-3" style="border:none; background:transparent; box-shadow:none;">
+            <div id="terminal" style="height: 450px;"></div>
+        </div>
+        
+        <div class="d-flex gap-3 mb-3" style="height: 150px;">
+             <div class="card" style="flex: 1;">
+                <div class="card-header text-sm py-1">RAM Usage</div>
+                <div class="card-body p-0" style="position: relative;">
+                    <canvas id="chart-ram"></canvas>
+                </div>
+            </div>
+            <div class="card" style="flex: 1;">
+                <div class="card-header text-sm py-1">Network I/O</div>
+                <div class="card-body p-0" style="position: relative;">
+                    <canvas id="chart-net"></canvas>
+                </div>
+            </div>
+            <div class="card" style="flex: 1;">
+                <div class="card-header text-sm py-1">Disk Usage</div>
+                <div class="card-body p-0" style="position: relative;">
+                    <canvas id="chart-disk"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-body py-2">
+                <div class="d-flex justify-between text-center">
+                    <div class="stat-box">
+                        <div class="text-muted text-sm">RAM</div>
+                        <div class="font-bold" id="stat-ram">OFFLINE</div>
+                    </div>
+                     <div class="stat-box">
+                        <div class="text-muted text-sm">DISK</div>
+                        <div class="font-bold" id="stat-disk">Loading...</div>
+                    </div>
+                     <div class="stat-box">
+                        <div class="text-muted text-sm">NETWORK</div>
+                        <div class="font-bold" id="stat-net">OFFLINE</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </template>
 
@@ -229,6 +328,7 @@
         </div>
     </template>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.2.1/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js"></script>
     <script src="/socket.io/socket.io.js"></script>

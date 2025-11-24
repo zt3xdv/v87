@@ -38,6 +38,16 @@ module.exports = {
         servers.push(server);
         save(SERVERS_FILE, servers);
     },
+    updateServer: (id, updates) => {
+        const servers = load(SERVERS_FILE);
+        const index = servers.findIndex(s => s.id === id);
+        if (index !== -1) {
+            servers[index] = { ...servers[index], ...updates };
+            save(SERVERS_FILE, servers);
+            return servers[index];
+        }
+        return null;
+    },
     deleteServer: (id) => {
         const servers = load(SERVERS_FILE).filter(s => s.id !== id);
         save(SERVERS_FILE, servers);

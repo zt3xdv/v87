@@ -107,6 +107,8 @@ const App = {
              createHeader('Server Management');
              createItem('Console', `/server/${serverId}/console`, view === 'console', 'terminal');
              createItem('Files', `/server/${serverId}/files`, view === 'files', 'folder');
+             createItem('Startup', `/server/${serverId}/startup`, view === 'startup', 'settings_power');
+             createItem('Settings', `/server/${serverId}/settings`, view === 'settings', 'settings');
         }
 
         createDivider();
@@ -133,7 +135,7 @@ const App = {
             App.cleanupTerminal();
         }
 
-        const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|files)$/);
+        const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|files|startup|settings)$/);
 
         if (path === '/dashboard') App.renderNav('dashboard');
         else if (path === '/admin') App.renderNav('admin');
@@ -366,19 +368,189 @@ const App = {
         };
 
         const contentDiv = document.getElementById('server-content');
+
+        // Handle Tabs
+        const tabs = ['console', 'files', 'startup', 'settings'];
+        tabs.forEach(t => {
+            const btn = document.getElementById(`tab-${t}`);
+            if (btn) {
+                btn.onclick = () => App.navigate(`/server/${id}/${t}`);
+                if (t === view) btn.classList.add('btn-accent'); // or active style
+                else btn.classList.remove('btn-accent');
+            }
+        });
+
         if (view === 'console') {
-            App.renderServerConsole(contentDiv, id, isRunning, updateStatus);
+            App.renderServerConsole(contentDiv, id, isRunning, updateStatus, server);
         } else if (view === 'files') {
             App.renderServerFiles(contentDiv, id);
+        } else if (view === 'startup') {
+            App.renderServerStartup(contentDiv, id, server);
+        } else if (view === 'settings') {
+            App.renderServerSettings(contentDiv, id, server);
         }
     },
 
-    renderServerConsole: (container, id, isInitiallyRunning, statusCallback) => {
+    renderServerStartup: (container, id, server) => {
+        const tmpl = document.getElementById('server-startup-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+
+        const ramInput = document.getElementById('su-ram');
+        const diskInput = document.getElementById('su-disk');
+        
+        ramInput.value = server.ram;
+        diskInput.value = server.diskSize;
+
+        document.getElementById('startup-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch(`/api/server/${id}/startup`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({
+                        ram: ramInput.value,
+                        diskSize: diskInput.value
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('startup-success').classList.remove('hidden');
+                    document.getElementById('startup-error').classList.add('hidden');
+                    setTimeout(() => document.getElementById('startup-success').classList.add('hidden'), 3000);
+                } else {
+                    document.getElementById('startup-error').textContent = data.error;
+                    document.getElementById('startup-error').classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Error saving settings');
+            } finally {
+                btn.disabled = false;
+            }
+        };
+    },
+
+    renderServerSettings: (container, id, server) => {
+        const tmpl = document.getElementById('server-settings-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+
+        const nameInput = document.getElementById('st-name');
+        const descInput = document.getElementById('st-desc');
+        
+        nameInput.value = server.name;
+        descInput.value = server.description || '';
+
+        document.getElementById('settings-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch(`/api/server/${id}/settings`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({
+                        name: nameInput.value,
+                        description: descInput.value
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('settings-success').classList.remove('hidden');
+                    // Update layout title if needed, but a reload/nav handles it
+                    document.getElementById('s-name').textContent = nameInput.value;
+                    setTimeout(() => document.getElementById('settings-success').classList.add('hidden'), 3000);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                 console.error(err);
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        document.getElementById('btn-delete-server').onclick = async () => {
+             if (!confirm(`Are you sure you want to delete ${server.name}? This action cannot be undone.`)) return;
+             
+             try {
+                 const res = await fetch(`/api/server/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const data = await res.json();
+                if (data.success) {
+                    App.navigate('/dashboard');
+                } else {
+                    alert('Error deleting server: ' + data.error);
+                }
+             } catch (err) {
+                 alert('Error deleting server');
+             }
+        };
+    },
+
+    renderServerConsole: (container, id, isInitiallyRunning, statusCallback, server) => {
         const tmpl = document.getElementById('server-console-template').content.cloneNode(true);
         container.innerHTML = '';
         container.appendChild(tmpl);
 
         App.cleanupTerminal();
+
+        // Initialize Charts
+        const createChart = (ctx, label, color, max) => {
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(20).fill(''),
+                    datasets: [{
+                        label: label,
+                        data: Array(20).fill(0),
+                        borderColor: color,
+                        tension: 0.4,
+                        pointRadius: 0,
+                        borderWidth: 2,
+                        fill: true,
+                        backgroundColor: color + '33'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: false },
+                        y: { beginAtZero: true, max: max, grid: { color: '#333' } }
+                    },
+                    animation: false
+                }
+            });
+        };
+
+        const ramChart = createChart(document.getElementById('chart-ram'), 'RAM (MB)', '#3b82f6', server.ram);
+        const netChart = createChart(document.getElementById('chart-net'), 'Net (KB/s)', '#10b981');
+        const diskChart = createChart(document.getElementById('chart-disk'), 'Disk (MB)', '#f59e0b', server.diskSize);
+
+        // Initial Disk State
+        if (server.diskUsed) {
+             document.getElementById('stat-disk').textContent = `${(server.diskUsed / 1024 / 1024).toFixed(2)} / ${server.diskSize} MB`;
+             // Fill disk chart with current value
+             diskChart.data.datasets[0].data.fill((server.diskUsed / 1024 / 1024).toFixed(2));
+             diskChart.update();
+        } else {
+             document.getElementById('stat-disk').textContent = `? / ${server.diskSize} MB`;
+        }
 
         App.term = new Terminal({ 
             cursorBlink: true,
@@ -406,8 +578,61 @@ const App = {
         
         App.term.onData(d => App.socket.emit('input', { serverId: id, data: d }));
         App.socket.on('term-data', d => App.term.write(d));
-        App.socket.on('vm-status', s => statusCallback(s === 'started'));
+        App.socket.on('vm-status', s => {
+            const running = s === 'started';
+            statusCallback(running);
+            if (!running) {
+                document.getElementById('stat-ram').textContent = 'OFFLINE';
+                document.getElementById('stat-net').textContent = 'OFFLINE';
+                // Keep disk as is
+            }
+        });
         
+        let lastRx = 0;
+        let lastTx = 0;
+
+        App.socket.on('stats', (stats) => {
+             // Update Stats Text
+             document.getElementById('stat-ram').textContent = `${stats.ram} / ${server.ram} MB`;
+             
+             // Disk
+             if (stats.disk) {
+                 const diskMB = (stats.disk / 1024 / 1024).toFixed(2);
+                 document.getElementById('stat-disk').textContent = `${diskMB} / ${server.diskSize} MB`;
+                 
+                 // Update Disk Chart
+                 diskChart.data.datasets[0].data.shift();
+                 diskChart.data.datasets[0].data.push(diskMB);
+                 diskChart.update();
+             }
+             
+             // Net
+             const rxDiff = stats.netRx - lastRx;
+             const txDiff = stats.netTx - lastTx;
+             
+             // Handle initial large jump or reset
+             if (lastRx === 0 && stats.netRx > 0) { lastRx = stats.netRx; lastTx = stats.netTx; return; }
+             
+             lastRx = stats.netRx;
+             lastTx = stats.netTx;
+             
+             const speed = ((rxDiff + txDiff) / 1024).toFixed(1); // KB/s roughly (assuming 1s interval)
+             document.getElementById('stat-net').textContent = `RX: ${(rxDiff/1024).toFixed(1)} KB/s | TX: ${(txDiff/1024).toFixed(1)} KB/s`;
+             
+             // Update Charts
+             ramChart.data.datasets[0].data.shift();
+             ramChart.data.datasets[0].data.push(stats.ram);
+             ramChart.update();
+
+             netChart.data.datasets[0].data.shift();
+             netChart.data.datasets[0].data.push(speed);
+             // Dynamic scale for net
+             if (speed > netChart.options.scales.y.max || netChart.options.scales.y.max === undefined) {
+                  netChart.options.scales.y.max = Math.ceil(speed * 1.2);
+             }
+             netChart.update();
+        });
+
         App.socket.on('connect_error', (err) => {
              App.term.write('\r\n\x1b[31mConnection error: ' + err.message + '\x1b[0m\r\n');
         });
