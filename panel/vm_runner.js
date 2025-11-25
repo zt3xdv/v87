@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import url from "node:url";
 import path from "node:path";
+import net from "node:net";
 import { V86 } from "../src/main.js";
 import { NodeNetworkAdapter } from "./node_network_adapter.js";
 import { handle9p } from "../src/node_9p_handler.js";
@@ -12,7 +13,7 @@ const TERM_RESET = "\x1b[0m";
 
 const args = process.argv.slice(2);
 const memorySize = parseInt(args[0]) || 128; 
-const isoPath = args[1] || "images/alpine.iso";
+const isoPath = args[1] || "images/linux.iso";
 const rootPath = args[2] || "root";
 
 const __dirname = url.fileURLToPath(new URL(".", import.meta.url));
@@ -21,7 +22,7 @@ const workspaceRoot = path.resolve(__dirname, "..");
 const biosPath = path.join(workspaceRoot, "bios/seabios.bin");
 const vgaBiosPath = path.join(workspaceRoot, "bios/vgabios.bin");
 const wasmPath = path.join(workspaceRoot, "build/v86.wasm");
-//const bzimagePath = path.join(workspaceRoot, "images/buildroot-bzimage68.bin");
+const bzimagePath = path.join(workspaceRoot, "images/buildroot-bzimage68.bin");
 const cdromPath = path.isAbsolute(isoPath) ? isoPath : path.join(workspaceRoot, isoPath);
 
 console.log(`${TERM_YELLOW_BOLD}[v87 Daemon] Starting up...${TERM_RESET}`);
@@ -29,7 +30,7 @@ console.log(`${TERM_YELLOW_BOLD}[v87 Daemon] Starting up...${TERM_RESET}`);
 const emulator = new V86({
     bios: { url: biosPath },
     vga_bios: { url: vgaBiosPath },
-    //bzimage: { url: bzimagePath },
+    bzimage: { url: bzimagePath },
     cdrom: { url: cdromPath },
     filesystem: {
         handle9p: handle9p
@@ -41,6 +42,44 @@ const emulator = new V86({
 });
 
 const netAdapter = new NodeNetworkAdapter(emulator.bus);
+
+// Expose VM port 3000 to a random local port
+const forwardServer = net.createServer((socket) => {
+    let conn;
+    try {
+        conn = netAdapter.connect(3000);
+    } catch (e) {
+        socket.destroy();
+        return;
+    }
+
+    socket.on('data', (data) => {
+        conn.write(new Uint8Array(data));
+    });
+
+    conn.on('data', (data) => {
+        socket.write(Buffer.from(data));
+    });
+
+    socket.on('close', () => {
+        conn.close();
+    });
+
+    socket.on('error', () => {
+        conn.close();
+    });
+
+    conn.on('close', () => {
+        if (!socket.destroyed) socket.destroy();
+    });
+});
+
+forwardServer.listen(0, '127.0.0.1', () => {
+    const addr = forwardServer.address();
+    if (process.send) {
+        process.send({ type: 'exposed-port', port: addr.port });
+    }
+});
 
 let serial_buffer = "";
 let mounted = false;

@@ -1,6 +1,8 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SERVERS_FILE = path.join(DATA_DIR, 'servers.json');
@@ -17,7 +19,7 @@ function save(file, data) {
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-module.exports = {
+export default {
     getUsers: () => load(USERS_FILE),
     saveUsers: (users) => save(USERS_FILE, users),
     getServers: () => load(SERVERS_FILE),

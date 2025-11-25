@@ -1,4 +1,4 @@
-const { verifyToken } = require('./token');
+import { verifyToken } from './token.js';
 
 function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -24,4 +24,4 @@ function requireAdmin(req, res, next) {
     next();
 }
 
-module.exports = { requireAuth, requireAdmin };
+export { requireAuth, requireAdmin };

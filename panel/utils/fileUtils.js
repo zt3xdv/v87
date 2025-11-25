@@ -1,5 +1,5 @@
-const fs = require('fs-extra');
-const path = require('path');
+import fs from 'fs-extra';
+import path from 'node:path';
 
 async function getDirSize(dir) {
     if (!fs.existsSync(dir)) return 0;
@@ -15,4 +15,4 @@ async function getDirSize(dir) {
     return stats.reduce((acc, size) => acc + size, 0);
 }
 
-module.exports = { getDirSize };
+export { getDirSize };

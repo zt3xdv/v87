@@ -1,7 +1,8 @@
 {
   "name": "v87",
   "version": "1.0.0",
-  "main": "nodejs.js",
+  "type": "module",
+  "main": "panel/server.js",
   "directories": {
     "doc": "docs",
     "example": "examples",

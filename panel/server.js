@@ -1,12 +1,21 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const http = require('http');
-const { Server } = require("socket.io");
-const path = require('path');
-const fs = require('fs-extra');
-const multer = require('multer');
-const { spawn } = require('child_process');
-const db = require('./db');
+import express from 'express';
+import bcrypt from 'bcryptjs';
+import http from 'node:http';
+import { Server } from "socket.io";
+import path from 'node:path';
+import fs from 'fs-extra';
+import multer from 'multer';
+import { spawn } from 'node:child_process';
+import db from './db.js';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+import { getDirSize } from './utils/fileUtils.js';
+import { generateToken, verifyToken } from './utils/token.js';
+import { requireAuth, requireAdmin } from './utils/authMiddleware.js';
 
 const TERM_GRAY = "\x1b[90m";
 const TERM_RESET = "\x1b[0m";
@@ -35,10 +44,6 @@ try {
     log('Warning: config.json not found, using defaults.');
 }
 
-const { getDirSize } = require('./utils/fileUtils');
-const { generateToken, verifyToken } = require('./utils/token');
-const { requireAuth, requireAdmin } = require('./utils/authMiddleware');
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -52,12 +57,64 @@ const UPLOADS_DIR = path.join(__dirname, '../data/uploads');
 fs.ensureDirSync(USER_DATA_DIR);
 fs.ensureDirSync(UPLOADS_DIR);
 
+const runningVMs = new Map();
+
+app.use((req, res, next) => {
+    const host = req.headers.host || "";
+    // Check for subdomain ID (e.g. 123456.domain.com or vm-123456.domain.com)
+    // We match ID at the start of the host
+    const parts = host.split('.');
+    let serverId = null;
+
+    // If we have at least 3 parts (sub.domain.tld) or localhost sub (sub.localhost)
+    if (parts.length >= 2) {
+        const sub = parts[0];
+        if (sub.startsWith('vm-')) {
+            const id = sub.substring(3);
+            if (/^\d+$/.test(id)) serverId = id;
+        }
+    }
+    
+    if (serverId) {
+        const vm = runningVMs.get(serverId);
+        if (vm && vm.exposedPort) {
+            const proxyReq = http.request({
+                hostname: '127.0.0.1',
+                port: vm.exposedPort,
+                path: req.url,
+                method: req.method,
+                headers: req.headers,
+            }, (proxyRes) => {
+                res.writeHead(proxyRes.statusCode, proxyRes.headers);
+                proxyRes.pipe(res, { end: true });
+            });
+
+            proxyReq.on('error', (e) => {
+                res.status(502);
+                try {
+                    const errorPage = fs.readFileSync(path.join(__dirname, 'public', 'error_vm.html'), 'utf8');
+                    res.send(errorPage);
+                } catch (err) {
+                    res.send("Bad Gateway: VM unreachable");
+                }
+            });
+
+            req.pipe(proxyReq, { end: true });
+            return;
+        }
+    } else if (parts.length >= 2) {
+        const errorPage = fs.readFileSync(path.join(__dirname, 'public', 'error_vm.html'), 'utf8');
+        res.send(errorPage);
+        return;
+    }
+    next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const upload = multer({ dest: UPLOADS_DIR });
-const runningVMs = new Map();
 
 // Limits Helper
 const LIMITS = config.limits || { maxServers: 3, maxRam: 1024, maxStorage: 1024 };
@@ -195,7 +252,13 @@ app.post('/api/server/:id/start', requireAuth, (req, res) => {
     });
     
     child.on('message', async (msg) => {
-        if (msg.type === 'stats') {
+        if (msg.type === 'exposed-port') {
+            const vm = runningVMs.get(serverId);
+            if (vm) {
+                vm.exposedPort = msg.port;
+                log(`Server ${serverId} exposed internal port 3000 on local port ${msg.port}`);
+            }
+        } else if (msg.type === 'stats') {
             const vm = runningVMs.get(serverId);
             if (vm) {
                 // Update disk stats every 10 seconds

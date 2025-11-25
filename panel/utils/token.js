@@ -1,5 +1,7 @@
-const crypto = require('crypto');
-const path = require('path');
+import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 let config;
 try {
@@ -34,4 +36,4 @@ function verifyToken(token) {
     }
 }
 
-module.exports = { generateToken, verifyToken };
+export { generateToken, verifyToken };
