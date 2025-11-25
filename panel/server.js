@@ -102,10 +102,6 @@ app.use((req, res, next) => {
             req.pipe(proxyReq, { end: true });
             return;
         }
-    } else if (parts.length >= 2) {
-        const errorPage = fs.readFileSync(path.join(__dirname, 'public', 'error_vm.html'), 'utf8');
-        res.send(errorPage);
-        return;
     }
     next();
 });
