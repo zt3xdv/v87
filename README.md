@@ -15,7 +15,7 @@ A lightweight, single-process control panel for managing browser-based virtual m
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/v87.git
+    git clone https://github.com/zt3xdv/v87.git
     cd v87
     ```
 
@@ -72,4 +72,4 @@ A lightweight, single-process control panel for managing browser-based virtual m
 
 ## License
 
-ISC
+M8T

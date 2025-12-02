@@ -1,16 +1,15 @@
 {
   "name": "v87",
-  "version": "1.0.0",
+  "version": "0.6.2",
   "type": "module",
   "main": "panel/server.js",
   "directories": {
-    "doc": "docs",
-    "example": "examples",
-    "lib": "lib"
+    "lib": "lib",
+    "build": "build"
   },
   "scripts": {
-    "start": "node panel/server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/panel/server.js",
+    "vm": "cd tests/vm; node ../../src/panel/vm_runner.js 512"
   },
   "keywords": [
     "panel",
@@ -19,8 +18,8 @@
     "v87"
   ],
   "author": "zt3xdv",
-  "license": "ISC",
-  "description": "v87 is a web panel and containers using v86, a web/node x86 emulator.",
+  "license": "MIT",
+  "description": "A lightweight, single-process control panel for managing browser-based virtual machines using v86.",
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "ejs": "^3.1.10",

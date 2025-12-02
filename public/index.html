@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>v87</title>
+    <link rel="stylesheet" href="/css/xterm.css" />
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/material/index.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container-fluid d-flex justify-between align-center">
+            <a href="/" class="navbar-brand" onclick="event.preventDefault(); App.navigate('/dashboard')">v87</a>
+            
+            <div class="dropdown" style="position: relative;">
+                <button class="btn btn-sm btn-secondary" id="nav-toggle" style="display: flex; align-items: center; gap: 5px;">
+                    <span class="material-symbols-outlined" style="font-size: 1.2rem;">account_circle</span>
+                    <span id="nav-user"></span> 
+                    <span class="material-symbols-outlined" style="font-size: 1rem;">expand_more</span>
+                </button>
+                <div class="dropdown-menu hidden" id="nav-menu">
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div id="app" class="container">
+        <div id="loading" class="text-center mt-5">Loading...</div>
+    </div>
+
+    <template id="login-template">
+        <div class="auth-container">
+            <div class="card">
+                <div class="card-header">Login</div>
+                <div class="card-body">
+                    <div id="login-error" class="alert alert-danger hidden"></div>
+                    <form id="login-form">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="l-username" class="form-control" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="password" id="l-password" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-accent w-100">Login</button>
+                        <div class="mt-2 text-center">
+                            <a href="/register" onclick="event.preventDefault(); App.navigate('/register')">Need an account? Register</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="register-template">
+        <div class="auth-container">
+            <div class="card">
+                <div class="card-header">Register</div>
+                <div class="card-body">
+                    <div id="reg-error" class="alert alert-danger hidden"></div>
+                    <form id="register-form">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="r-username" class="form-control" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="password" id="r-password" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-success w-100">Register</button>
+                        <div class="mt-2 text-center">
+                            <a href="/login" onclick="event.preventDefault(); App.navigate('/login')">Have an account? Login</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="dashboard-template">
+        <div class="dashboard-grid mb-4">
+            <div>
+                <div class="card">
+                    <div class="card-header">Usage Stats</div>
+                    <div class="card-body">
+                        <div class="stat-item"><span>User</span> <strong id="d-username"></strong></div>
+                        <div class="stat-item"><span>RAM</span> <span><span id="d-ram">0</span> / 1024 MB</span></div>
+                        <div class="stat-item"><span>Storage</span> <span><span id="d-storage">0</span> / 1024 MB</span></div>
+                        <div class="stat-item"><span>Slots</span> <span><span id="d-slots">0</span> / 3</span></div>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="card">
+                    <div class="card-header">Create Server</div>
+                    <div class="card-body">
+                        <div id="create-error" class="alert alert-danger hidden"></div>
+                        <form id="create-server-form">
+                            <div class="d-flex gap-2 mb-3">
+                                <input type="text" id="c-name" class="form-control" placeholder="Server Name" style="flex: 2;" required>
+                                <input type="number" id="c-ram" class="form-control" placeholder="RAM (MB)" style="flex: 1;" required>
+                                <input type="number" id="c-disk" class="form-control" placeholder="Disk (MB)" value="1024" style="flex: 1;" readonly>
+                            </div>
+                            <div class="form-group">
+                                <input type="text" id="c-desc" class="form-control" placeholder="Description (optional)">
+                            </div>
+                            <button type="submit" class="btn btn-success w-100">Create Server</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <h3>Your Servers</h3>
+        <div id="server-list" class="server-list">
+            <!-- Server items injected here -->
+        </div>
+    </template>
+
+    <template id="server-layout-template">
+        <div class="d-flex justify-between align-center mb-4">
+            <div>
+                <h2 id="s-name" class="mb-0"></h2>
+                <div class="text-muted text-sm" id="s-id"></div>
+            </div>
+            <div class="d-flex gap-2 align-center">
+                 <span class="badge" id="s-status-badge">STOPPED</span>
+                 <button id="btn-start" class="btn btn-success btn-sm">Start</button>
+                 <button id="btn-stop" class="btn btn-danger btn-sm">Stop</button>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mb-3 p-2 card" style="background: rgba(255,255,255,0.05);">
+            <button class="btn btn-sm btn-secondary" id="tab-console">Console</button>
+            <button class="btn btn-sm btn-secondary" id="tab-files">Files</button>
+            <button class="btn btn-sm btn-secondary" id="tab-startup">Startup</button>
+            <button class="btn btn-sm btn-secondary" id="tab-settings">Settings</button>
+        </div>
+
+        <div id="server-content">
+            <!-- Sub-view content injected here -->
+        </div>
+    </template>
+
+    <template id="server-startup-template">
+        <div class="card">
+            <div class="card-header">Startup Configuration</div>
+            <div class="card-body">
+                 <div id="startup-error" class="alert alert-danger hidden"></div>
+                 <div id="startup-success" class="alert alert-success hidden">Saved!</div>
+                 <form id="startup-form">
+                    <div class="form-group">
+                        <label>RAM (MB)</label>
+                        <input type="number" id="su-ram" class="form-control" required>
+                    </div>
+                     <div class="form-group">
+                        <label>Disk Size (MB)</label>
+                        <input type="number" id="su-disk" class="form-control">
+                    </div>
+                    <div class="alert alert-warning">Server must be stopped to change startup settings.</div>
+                    <button type="submit" class="btn btn-accent">Save Changes</button>
+                 </form>
+            </div>
+        </div>
+    </template>
+
+    <template id="server-settings-template">
+        <div class="card mb-4">
+            <div class="card-header">General Settings</div>
+            <div class="card-body">
+                 <div id="settings-success" class="alert alert-success hidden">Saved!</div>
+                 <form id="settings-form">
+                    <div class="form-group">
+                        <label>Server Name</label>
+                        <input type="text" id="st-name" class="form-control" required>
+                    </div>
+                     <div class="form-group">
+                        <label>Description</label>
+                        <input type="text" id="st-desc" class="form-control">
+                    </div>
+                    <button type="submit" class="btn btn-accent">Save Changes</button>
+                 </form>
+            </div>
+        </div>
+        
+        <div class="card border-danger">
+            <div class="card-header text-danger">Danger Zone</div>
+            <div class="card-body">
+                <p>Deleting your server is irreversible.</p>
+                <button id="btn-delete-server" class="btn btn-danger">Delete Server</button>
+            </div>
+        </div>
+    </template>
+
+    <template id="server-console-template">
+        <div class="card mb-3" style="border:none; background:transparent; box-shadow:none;">
+            <div id="terminal" style="height: 450px;"></div>
+        </div>
+        
+        <div class="d-flex flex-c gap-3 mb-3" style="height: auto;">
+             <div class="card" style="flex: 1;">
+                <div class="card-header text-sm py-1">RAM Usage</div>
+                <div class="card-body p-0" style="position: relative;">
+                    <canvas id="chart-ram"></canvas>
+                </div>
+            </div>
+            <div class="card" style="flex: 1;">
+                <div class="card-header text-sm py-1">Network I/O</div>
+                <div class="card-body p-0" style="position: relative;">
+                    <canvas id="chart-net"></canvas>
+                </div>
+            </div>
+            <div class="card" style="flex: 1;">
+                <div class="card-header text-sm py-1">Disk Usage</div>
+                <div class="card-body p-0" style="position: relative;">
+                    <canvas id="chart-disk"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-body py-2">
+                <div class="d-flex justify-between text-center">
+                    <div class="stat-box">
+                        <div class="text-muted text-sm">RAM</div>
+                        <div class="font-bold" id="stat-ram">OFFLINE</div>
+                    </div>
+                     <div class="stat-box">
+                        <div class="text-muted text-sm">DISK</div>
+                        <div class="font-bold" id="stat-disk">Loading...</div>
+                    </div>
+                     <div class="stat-box">
+                        <div class="text-muted text-sm">NETWORK</div>
+                        <div class="font-bold" id="stat-net">OFFLINE</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="server-files-template">
+        <div class="card">
+            <div class="card-body">
+                    <div class="d-flex gap-2 mb-3" style="flex-wrap:wrap;">
+                    <button id="btn-refresh-files" class="btn btn-sm btn-secondary" title="Refresh"><span class="material-symbols-outlined icon-sm">refresh</span></button>
+                    <button id="btn-new-folder" class="btn btn-sm btn-secondary" title="New Folder"><span class="material-symbols-outlined icon-sm">create_new_folder</span></button>
+                    <button id="btn-new-file" class="btn btn-sm btn-secondary" title="New File"><span class="material-symbols-outlined icon-sm">note_add</span></button>
+                    <div style="flex:1;"></div>
+                    <input type="file" id="file-upload" class="d-none hidden">
+                    <button onclick="document.getElementById('file-upload').click()" class="btn btn-sm btn-accent" title="Upload"><span class="material-symbols-outlined icon-sm">upload</span> Upload</button>
+                </div>
+                <nav>
+                    <ul class="breadcrumb" id="file-breadcrumb">
+                        <!-- Breadcrumbs -->
+                    </ul>
+                </nav>
+                <div style="overflow-x:auto;">
+                    <table class="file-table">
+                        <thead><tr><th>Name</th><th>Size</th><th style="text-align:right">Actions</th></tr></thead>
+                        <tbody id="file-list"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <template id="editor-template">
+        <div class="editor-overlay">
+            <div class="editor-container">
+                <div class="editor-header">
+                    <span id="editor-filename" class="font-bold"></span>
+                    <div class="d-flex gap-2">
+                        <button id="btn-save-file" class="btn btn-sm btn-success">Save</button>
+                        <button id="btn-close-editor" class="btn btn-sm btn-danger">Close</button>
+                    </div>
+                </div>
+                <div class="editor-content">
+                    <textarea id="code-editor" spellcheck="false"></textarea>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="admin-dashboard-template">
+        <div class="mb-4">
+            <h2>Admin Dashboard</h2>
+            <div class="card mb-4">
+                <div class="card-header">All Servers</div>
+                <div class="card-body">
+                    <div style="overflow-x:auto;">
+                        <table class="file-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Owner</th>
+                                    <th>Status</th>
+                                    <th>RAM</th>
+                                    <th style="text-align:right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-server-list"></tbody>
+                        </table>
+                    </div>
+                    <div class="d-flex justify-between mt-3 align-center">
+                        <button id="prev-page" class="btn btn-sm btn-secondary">Previous</button>
+                        <span id="page-info">Page 1</span>
+                        <button id="next-page" class="btn btn-sm btn-secondary">Next</button>
+                    </div>
+                </div>
+            </div>
+             <div class="card">
+                <div class="card-header">Users</div>
+                <div class="card-body">
+                    <div style="overflow-x:auto;">
+                         <table class="file-table">
+                            <thead><tr><th>Username</th><th>Role</th><th>Created At</th></tr></thead>
+                            <tbody id="admin-user-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script src="/js/chart.js"></script>
+    <script src="/js/xterm.js"></script>
+    <script src="/js/xterm-addon-fit.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
