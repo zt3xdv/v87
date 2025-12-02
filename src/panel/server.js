@@ -190,7 +190,7 @@ app.post('/api/server/:id/start', requireAuth, (req, res) => {
     const serverDir = path.join(USER_DATA_DIR, owner.username, 'servers', serverId);
     
     const vmRunner = path.join(__dirname, 'vm_runner.js');
-    const child = spawn('node', [vmRunner, server.ram.toString(), 'vm/images/linux4.iso', 'root'], {
+    const child = spawn('node', [vmRunner, server.ram.toString()], {
         cwd: serverDir,
         stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     });
