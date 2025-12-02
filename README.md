@@ -31,10 +31,6 @@ A lightweight, single-process control panel for managing browser-based virtual m
         ```
     *   Edit `config.json` to set your secret key, port, and resource limits.
 
-4.  **Prepare System Images:**
-    *   Ensure you have a compatible ISO image (e.g., Alpine Linux) in `images/linux.iso` or update the path in your server creation logic/config.
-    *   Ensure BIOS files are present in `bios/`.
-
 ## Usage
 
 1.  **Start the panel:**
@@ -54,22 +50,19 @@ A lightweight, single-process control panel for managing browser-based virtual m
 
 ## Directory Structure
 
-*   `panel/`: Source code for the control panel (server & frontend).
 *   `data/`: Persistent data storage.
     *   `users.json`: User database.
     *   `servers.json`: Server database.
     *   `users_data/`: Root filesystems for user servers.
     *   `uploads/`: Temporary upload directory.
-*   `images/`: ISO images for VMs.
-*   `bios/`: BIOS binaries for v86.
 *   `config.json`: Configuration file.
 
 ## Development
 
-*   **Frontend**: The frontend is a vanilla JS SPA located in `panel/public`.
-*   **Backend**: A Node.js Express server located in `panel/server.js`.
-*   **VM Runner**: VMs are spawned as child processes using `panel/vm_runner.js`.
+*   **Frontend**: The frontend is a vanilla JS SPA located in `public`.
+*   **Backend**: A Node.js Express server located in `src/panel/server.js`.
+*   **VM Runner**: VMs are spawned as child processes using `src/panel/vm_runner.js`.
 
 ## License
 
-M8T
+MIT
