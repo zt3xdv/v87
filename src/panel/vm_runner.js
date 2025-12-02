@@ -72,7 +72,7 @@ process.stdin.resume();
 process.stdin.setEncoding("utf8");
 
 process.stdin.on("data", function(c) {
-    if(c === "\u0003") {
+    if(c === "\u0004") {
         emulator.destroy();
         process.exit();
     } else {
