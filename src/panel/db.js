@@ -20,26 +20,48 @@ function save(file, data) {
 }
 
 export default {
+    // Users
     getUsers: () => load(USERS_FILE),
     saveUsers: (users) => save(USERS_FILE, users),
-    getServers: () => load(SERVERS_FILE),
-    saveServers: (servers) => save(SERVERS_FILE, servers),
     
     findUser: (username) => load(USERS_FILE).find(u => u.username === username),
     findUserById: (id) => load(USERS_FILE).find(u => u.id === id),
+    
     createUser: (user) => {
         const users = load(USERS_FILE);
         users.push(user);
         save(USERS_FILE, users);
     },
     
+    updateUser: (id, updates) => {
+        const users = load(USERS_FILE);
+        const index = users.findIndex(u => u.id === id);
+        if (index !== -1) {
+            users[index] = { ...users[index], ...updates };
+            save(USERS_FILE, users);
+            return users[index];
+        }
+        return null;
+    },
+    
+    deleteUser: (id) => {
+        const users = load(USERS_FILE).filter(u => u.id !== id);
+        save(USERS_FILE, users);
+    },
+    
+    // Servers
+    getServers: () => load(SERVERS_FILE),
+    saveServers: (servers) => save(SERVERS_FILE, servers),
+    
     getUserServers: (userId) => load(SERVERS_FILE).filter(s => s.ownerId === userId),
     getServer: (id) => load(SERVERS_FILE).find(s => s.id === id),
+    
     addServer: (server) => {
         const servers = load(SERVERS_FILE);
         servers.push(server);
         save(SERVERS_FILE, servers);
     },
+    
     updateServer: (id, updates) => {
         const servers = load(SERVERS_FILE);
         const index = servers.findIndex(s => s.id === id);
@@ -50,8 +72,27 @@ export default {
         }
         return null;
     },
+    
     deleteServer: (id) => {
         const servers = load(SERVERS_FILE).filter(s => s.id !== id);
         save(SERVERS_FILE, servers);
+    },
+    
+    deleteUserServers: (userId) => {
+        const servers = load(SERVERS_FILE).filter(s => s.ownerId !== userId);
+        save(SERVERS_FILE, servers);
+    },
+    
+    // Stats
+    getStats: () => {
+        const users = load(USERS_FILE);
+        const servers = load(SERVERS_FILE);
+        return {
+            totalUsers: users.length,
+            totalServers: servers.length,
+            totalRam: servers.reduce((acc, s) => acc + (s.ram || 0), 0),
+            suspendedUsers: users.filter(u => u.suspended).length,
+            suspendedServers: servers.filter(s => s.suspended).length
+        };
     }
 };

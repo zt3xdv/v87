@@ -2,7 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { Marshall, Unmarshall } from "../lib/marshall.js";
 
-const ROOT = path.resolve("./root");
+let ROOT = path.resolve("./root");
+let PERMS_FILE = path.resolve("./permissions.json");
+
+export function set9pRoot(rootPath, permsPath) {
+    ROOT = rootPath;
+    PERMS_FILE = permsPath;
+    loadPerms();
+}
 
 // 9P2000.L Error Codes
 const EPERM = 1;
@@ -20,22 +27,92 @@ const QTFILE = 0x00;
 // File Types for mode
 const S_IFDIR = 0x4000;
 const S_IFREG = 0x8000;
+const S_IFLNK = 0xA000;
 
 const fids = new Map(); // fid -> { path, fd, type, dirEntries, dirIndex }
 
-function statToQid(stats) {
-return {
-type: stats.isDirectory() ? QTDIR : QTFILE,
-version: Math.floor(stats.mtimeMs) & 0xFFFFFFFF, // Truncate to 32-bit
-path: Number(stats.ino)
-};
+let permsCache = {};
+let permsDirty = false;
+
+function loadPerms() {
+    try {
+        if (fs.existsSync(PERMS_FILE)) {
+            permsCache = JSON.parse(fs.readFileSync(PERMS_FILE, 'utf8'));
+        }
+    } catch(e) {
+        permsCache = {};
+    }
 }
 
-function getMode(stats) {
-let mode = stats.mode & 0o777;
-if (stats.isDirectory()) mode |= S_IFDIR;
-else mode |= S_IFREG;
-return mode;
+function savePerms() {
+    if (!permsDirty) return;
+    try {
+        fs.writeFileSync(PERMS_FILE, JSON.stringify(permsCache));
+        permsDirty = false;
+    } catch(e) {}
+}
+
+function getRelPath(fullPath) {
+    return path.relative(ROOT, fullPath) || '.';
+}
+
+function getPerm(fullPath) {
+    const rel = getRelPath(fullPath);
+    if (permsCache[rel]) {
+        return permsCache[rel];
+    }
+    return null;
+}
+
+function setPerm(fullPath, mode, uid = 0, gid = 0) {
+    const rel = getRelPath(fullPath);
+    permsCache[rel] = { mode: mode & 0o7777, uid, gid };
+    permsDirty = true;
+    savePerms();
+}
+
+function deletePerm(fullPath) {
+    const rel = getRelPath(fullPath);
+    if (permsCache[rel]) {
+        delete permsCache[rel];
+        permsDirty = true;
+        savePerms();
+    }
+}
+
+function renamePerm(oldPath, newPath) {
+    const oldRel = getRelPath(oldPath);
+    const newRel = getRelPath(newPath);
+    if (permsCache[oldRel]) {
+        permsCache[newRel] = permsCache[oldRel];
+        delete permsCache[oldRel];
+        permsDirty = true;
+        savePerms();
+    }
+}
+
+loadPerms();
+
+function statToQid(stats) {
+    return {
+        type: stats.isDirectory() ? QTDIR : QTFILE,
+        version: Math.floor(stats.mtimeMs) & 0xFFFFFFFF,
+        path: Number(stats.ino)
+    };
+}
+
+function getMode(stats, fullPath) {
+    const perm = getPerm(fullPath);
+    let mode = perm ? perm.mode : (stats.mode & 0o777);
+    if (stats.isDirectory()) mode |= S_IFDIR;
+    else if (stats.isSymbolicLink()) mode |= S_IFLNK;
+    else mode |= S_IFREG;
+    return mode;
+}
+
+function getUidGid(fullPath) {
+    const perm = getPerm(fullPath);
+    return perm ? { uid: perm.uid || 0, gid: perm.gid || 0 } : { uid: 0, gid: 0 };
 }
 
 export function handle9p(reqBuf, reply) {
@@ -146,7 +223,8 @@ try {
             }
             const gst = fs.statSync(gFidObj.path);
             const qid = statToQid(gst);
-            const mode = getMode(gst);
+            const mode = getMode(gst, gFidObj.path);
+            const { uid: gUid, gid: gGid } = getUidGid(gFidObj.path);
             
             // Rgetattr: valid, qid, mode, uid, gid, nlink, rdev, size, blksize, blocks, atime, mtime, ctime, btime, gen, data_version
             sendReply(25, tag, 
@@ -155,8 +233,8 @@ try {
                     0x1FFF, // valid
                     qid,
                     mode,
-                    0, // uid
-                    0, // gid
+                    gUid, // uid
+                    gGid, // gid
                     1, // nlink
                     0, // rdev
                     Number(gst.size),
@@ -170,6 +248,33 @@ try {
                     0 // data_version
                 ]
             );
+            break;
+        
+        case 26: // Tsetattr
+            const [safid, savalid, samode, sauid, sagid, sasize] = Unmarshall(["w", "w", "w", "w", "w", "d"], reqBuf, state);
+            const saFidObj = fids.get(safid);
+            if (!saFidObj || !fs.existsSync(saFidObj.path)) {
+                sendError(tag, "fid not found", ENOENT);
+                break;
+            }
+            try {
+                const currentPerm = getPerm(saFidObj.path) || { mode: 0o755, uid: 0, gid: 0 };
+                let newMode = currentPerm.mode;
+                let newUid = currentPerm.uid;
+                let newGid = currentPerm.gid;
+                
+                if (savalid & 1) newMode = samode & 0o7777; // ATTR_MODE
+                if (savalid & 2) newUid = sauid; // ATTR_UID
+                if (savalid & 4) newGid = sagid; // ATTR_GID
+                if (savalid & 8) { // ATTR_SIZE
+                    fs.truncateSync(saFidObj.path, Number(sasize));
+                }
+                
+                setPerm(saFidObj.path, newMode, newUid, newGid);
+                sendReply(27, tag);
+            } catch(e) {
+                sendError(tag, e.message, EIO);
+            }
             break;
 
         case 112: // Tlopen (9P2000.L)

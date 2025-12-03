@@ -97,7 +97,8 @@ const App = {
         };
 
         createItem('Dashboard', '/dashboard', view === 'dashboard', 'dashboard');
-
+        createItem('Create', '/create', view === 'create', 'note_add');
+        
         if (App.user.role === 'admin') {
              createItem('Admin', '/admin', view === 'admin', 'admin_panel_settings');
         }
@@ -135,28 +136,40 @@ const App = {
             App.cleanupTerminal();
         }
 
-        const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|files|startup|settings)$/);
+        const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|files|startup|settings|creating)$/);
+
+        // Check for admin routes
+        const adminMatch = path.match(/^\/admin(?:\/(servers|users|config))?$/);
 
         if (path === '/dashboard') App.renderNav('dashboard');
-        else if (path === '/admin') App.renderNav('admin');
+        else if (adminMatch) App.renderNav('admin');
         else if (serverMatch) App.renderNav(serverMatch[2], serverMatch[1]);
         else App.renderNav('none');
 
         if (path === '/login') App.renderLogin(appDiv);
         else if (path === '/register') App.renderRegister(appDiv);
-        else if (path === '/admin') {
+        else if (adminMatch) {
             if (!App.user) return App.navigate('/login');
             if (App.user.role !== 'admin') return App.navigate('/dashboard');
-            App.renderAdminDashboard(appDiv);
+            const tab = adminMatch[1] || 'servers';
+            App.renderAdminPanel(appDiv, tab);
         }
         else if (path === '/dashboard') {
             if (!App.user) return App.navigate('/login');
             App.renderDashboard(appDiv);
         }
+        else if (path === '/create') {
+            if (!App.user) return App.navigate('/login');
+            App.renderCreate(appDiv);
+        }
         else if (serverMatch) {
             if (!App.user) return App.navigate('/login');
             const [_, serverId, view] = serverMatch;
-            App.renderServerLayout(appDiv, serverId, view);
+            if (view === 'creating') {
+                App.renderServerCreating(appDiv, serverId);
+            } else {
+                App.renderServerLayout(appDiv, serverId, view);
+            }
         }
         else {
             if (App.user) App.navigate('/dashboard');
@@ -173,6 +186,46 @@ const App = {
             App.term.dispose();
             App.term = null;
         }
+    },
+
+    renderServerCreating: async (container, serverId) => {
+        const res = await fetch(`/api/server/${serverId}`, {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        if (!res.ok) {
+            container.innerHTML = '<div class="alert alert-danger">Server not found</div>';
+            return;
+        }
+        const data = await res.json();
+        
+        const tmpl = document.getElementById('server-creating-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        document.getElementById('creating-name').textContent = data.server.name;
+        
+        const pollProgress = async () => {
+            try {
+                const r = await fetch(`/api/server/${serverId}/creation-progress`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const progress = await r.json();
+                
+                document.getElementById('creating-progress').style.width = `${progress.percent}%`;
+                document.getElementById('creating-percent').textContent = progress.percent;
+                document.getElementById('creating-status').textContent = progress.status || 'Processing...';
+                
+                if (progress.complete) {
+                    setTimeout(() => App.navigate(`/server/${serverId}/console`), 500);
+                } else {
+                    setTimeout(pollProgress, 500);
+                }
+            } catch (e) {
+                setTimeout(pollProgress, 1000);
+            }
+        };
+        
+        pollProgress();
     },
 
     renderLogin: (container) => {
@@ -249,39 +302,7 @@ const App = {
             const tmpl = document.getElementById('dashboard-template').content.cloneNode(true);
             container.innerHTML = '';
             container.appendChild(tmpl);
-
-            document.getElementById('d-username').textContent = App.user.username;
-            document.getElementById('d-ram').textContent = data.stats.totalRam;
-            document.getElementById('d-storage').textContent = (data.stats.totalStorage / 1024 / 1024).toFixed(2);
-            document.getElementById('d-slots').textContent = data.stats.slotsUsed;
-
-            document.getElementById('create-server-form').onsubmit = async (e) => {
-                e.preventDefault();
-                const payload = {
-                    name: document.getElementById('c-name').value,
-                    ram: document.getElementById('c-ram').value,
-                    diskSize: document.getElementById('c-disk').value,
-                    description: document.getElementById('c-desc').value
-                };
-                
-                const r = await fetch('/api/server/create', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
-                    },
-                    body: JSON.stringify(payload)
-                });
-                const d = await r.json();
-                if (d.success) {
-                    App.renderDashboard(container);
-                } else {
-                    const err = document.getElementById('create-error');
-                    err.textContent = d.error;
-                    err.classList.remove('hidden');
-                }
-            };
-
+            
             const list = document.getElementById('server-list');
             data.servers.forEach(s => {
                 const item = document.createElement('div');
@@ -314,6 +335,62 @@ const App = {
         } catch (err) {
             console.error(err);
             container.innerHTML = '<div class="alert alert-danger">Error loading dashboard</div>';
+        }
+    },
+    
+    renderCreate: async (container) => {
+        container.innerHTML = '<div class="text-center mt-5">Loading create...</div>';
+        try {
+            const res = await fetch('/api/dashboard', {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            if (!res.ok) throw new Error('Failed to load');
+            const data = await res.json();
+            
+            const tmpl = document.getElementById('create-template').content.cloneNode(true);
+            container.innerHTML = '';
+            container.appendChild(tmpl);
+            
+            document.getElementById('d-ram').textContent = data.stats.totalRam;
+            document.getElementById('d-max-ram').textContent = data.stats.maxRam;
+            document.getElementById('d-storage').textContent = (data.stats.totalStorage / 1024 / 1024).toFixed(2);
+            document.getElementById('d-max-storage').textContent = data.stats.maxStorage;
+            document.getElementById('d-slots').textContent = data.stats.slotsUsed;
+            document.getElementById('d-max-slots').textContent = data.stats.slotsMax;
+
+            document.getElementById('create-server-form').onsubmit = async (e) => {
+                e.preventDefault();
+                const payload = {
+                    name: document.getElementById('c-name').value,
+                    ram: document.getElementById('c-ram').value,
+                    diskSize: document.getElementById('c-disk').value,
+                    description: document.getElementById('c-desc').value
+                };
+                
+                const r = await fetch('/api/server/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const d = await r.json();
+                if (d.success) {
+                    if (d.creating) {
+                        App.navigate(`/server/${d.server.id}/creating`);
+                    } else {
+                        App.navigate("/dashboard");
+                    }
+                } else {
+                    const err = document.getElementById('create-error');
+                    err.textContent = d.error;
+                    err.classList.remove('hidden');
+                }
+            };
+        } catch (err) {
+            console.error(err);
+            container.innerHTML = '<div class="alert alert-danger">Error loading create</div>';
         }
     },
 
@@ -368,17 +445,6 @@ const App = {
         };
 
         const contentDiv = document.getElementById('server-content');
-
-        // Handle Tabs
-        const tabs = ['console', 'files', 'startup', 'settings'];
-        tabs.forEach(t => {
-            const btn = document.getElementById(`tab-${t}`);
-            if (btn) {
-                btn.onclick = () => App.navigate(`/server/${id}/${t}`);
-                if (t === view) btn.classList.add('btn-accent'); // or active style
-                else btn.classList.remove('btn-accent');
-            }
-        });
 
         if (view === 'console') {
             App.renderServerConsole(contentDiv, id, isRunning, updateStatus, server);
@@ -538,6 +604,7 @@ const App = {
             });
         };
 
+        const cpuChart = createChart(document.getElementById('chart-cpu'), 'CPU (%)', '#8b5cf6', 100);
         const ramChart = createChart(document.getElementById('chart-ram'), 'RAM (MB)', '#3b82f6', server.ram);
         const netChart = createChart(document.getElementById('chart-net'), 'Net (KB/s)', '#10b981');
         const diskChart = createChart(document.getElementById('chart-disk'), 'Disk (MB)', '#f59e0b', server.diskSize);
@@ -582,9 +649,9 @@ const App = {
             const running = s === 'started';
             statusCallback(running);
             if (!running) {
+                document.getElementById('stat-cpu').textContent = 'OFFLINE';
                 document.getElementById('stat-ram').textContent = 'OFFLINE';
                 document.getElementById('stat-net').textContent = 'OFFLINE';
-                // Keep disk as is
             }
         });
         
@@ -592,7 +659,14 @@ const App = {
         let lastTx = 0;
 
         App.socket.on('stats', (stats) => {
-             // Update Stats Text
+             // Update CPU
+             const cpuPercent = stats.cpu || 0;
+             document.getElementById('stat-cpu').textContent = `${cpuPercent}%`;
+             cpuChart.data.datasets[0].data.shift();
+             cpuChart.data.datasets[0].data.push(cpuPercent);
+             cpuChart.update();
+             
+             // Update RAM
              document.getElementById('stat-ram').textContent = `${stats.ram} / ${server.ram} MB`;
              
              // Disk
@@ -847,6 +921,60 @@ const App = {
         }
     },
 
+    monacoEditor: null,
+    monacoLoaded: false,
+    
+    loadMonaco: () => {
+        return new Promise((resolve) => {
+            if (App.monacoLoaded) {
+                resolve();
+                return;
+            }
+            
+            if (typeof require !== 'undefined' && typeof require.config === 'function') {
+                resolve();
+                App.monacoLoaded = true;
+                return;
+            }
+            
+            const script = document.createElement('script');
+            script.src = '/js/monaco/vs/loader.js';
+            script.onload = () => {
+                require.config({ paths: { vs: '/js/monaco/vs' } });
+                App.monacoLoaded = true;
+                resolve();
+            };
+            document.head.appendChild(script);
+        });
+    },
+    
+    getLanguageFromPath: (filePath) => {
+        const ext = filePath.split('.').pop().toLowerCase();
+        const langMap = {
+            'js': 'javascript', 'jsx': 'javascript',
+            'ts': 'typescript', 'tsx': 'typescript',
+            'json': 'json',
+            'html': 'html', 'htm': 'html',
+            'css': 'css', 'scss': 'scss', 'less': 'less',
+            'md': 'markdown',
+            'py': 'python',
+            'rb': 'ruby',
+            'php': 'php',
+            'java': 'java',
+            'c': 'c', 'h': 'c',
+            'cpp': 'cpp', 'hpp': 'cpp', 'cc': 'cpp',
+            'go': 'go',
+            'rs': 'rust',
+            'sh': 'shell', 'bash': 'shell',
+            'yaml': 'yaml', 'yml': 'yaml',
+            'xml': 'xml',
+            'sql': 'sql',
+            'dockerfile': 'dockerfile',
+            'makefile': 'makefile'
+        };
+        return langMap[ext] || 'plaintext';
+    },
+
     openEditor: async (id, fullPath) => {
         const r = await fetch(`/api/server/${id}/read-file?path=${encodeURIComponent(fullPath)}`, {
              headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -861,115 +989,475 @@ const App = {
         document.body.appendChild(tmpl);
 
         const overlay = document.querySelector('.editor-overlay');
-        const textarea = document.getElementById('code-editor');
         document.getElementById('editor-filename').textContent = fullPath;
-        textarea.value = content;
+
+        await App.loadMonaco();
+        
+        require(['vs/editor/editor.main'], function() {
+            App.monacoEditor = monaco.editor.create(document.getElementById('monaco-editor'), {
+                value: content,
+                language: App.getLanguageFromPath(fullPath),
+                theme: 'vs-dark',
+                automaticLayout: true,
+                minimap: { enabled: true },
+                fontSize: 14,
+                fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
+                scrollBeyondLastLine: false,
+                wordWrap: 'on',
+                tabSize: 4
+            });
+            
+            App.monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                document.getElementById('btn-save-file').click();
+            });
+        });
 
         document.getElementById('btn-close-editor').onclick = () => {
+            if (App.monacoEditor) {
+                App.monacoEditor.dispose();
+                App.monacoEditor = null;
+            }
             document.body.removeChild(overlay);
         };
 
         document.getElementById('btn-save-file').onclick = async () => {
             const btn = document.getElementById('btn-save-file');
-            const originalText = btn.textContent;
-            btn.textContent = 'Saving...';
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">hourglass_empty</span> Saving...';
             btn.disabled = true;
 
             try {
+                const editorContent = App.monacoEditor ? App.monacoEditor.getValue() : '';
                 await fetch(`/api/server/${id}/save-file`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${localStorage.getItem('token')}`
                     },
-                    body: JSON.stringify({ path: fullPath, content: textarea.value })
+                    body: JSON.stringify({ path: fullPath, content: editorContent })
                 });
-                btn.textContent = 'Saved!';
+                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">check</span> Saved!';
                 setTimeout(() => { 
-                    btn.textContent = originalText; 
+                    btn.innerHTML = originalHTML; 
                     btn.disabled = false; 
                 }, 1000);
             } catch (e) {
                 alert('Error saving file');
-                btn.textContent = originalText;
+                btn.innerHTML = originalHTML;
                 btn.disabled = false;
             }
         };
     },
 
-    renderAdminDashboard: async (container) => {
-        container.innerHTML = '<div class="text-center mt-5">Loading Admin Dashboard...</div>';
-        const tmpl = document.getElementById('admin-dashboard-template').content.cloneNode(true);
+    // =====================
+    // ADMIN PANEL
+    // =====================
+    
+    renderAdminPanel: async (container, tab) => {
+        container.innerHTML = '<div class="text-center mt-5">Loading Admin Panel...</div>';
+        
+        const tmpl = document.getElementById('admin-layout-template').content.cloneNode(true);
         container.innerHTML = '';
         container.appendChild(tmpl);
-
+        
+        // Load stats
+        try {
+            const r = await fetch('/api/admin/stats', {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const stats = await r.json();
+            document.getElementById('stat-users').textContent = stats.totalUsers;
+            document.getElementById('stat-servers').textContent = stats.totalServers;
+            document.getElementById('stat-running').textContent = stats.runningServers;
+            document.getElementById('stat-ram').textContent = stats.totalRam + ' MB';
+        } catch (e) { console.error(e); }
+        
+        // Setup tabs
+        const tabs = ['servers', 'users', 'config'];
+        tabs.forEach(t => {
+            const btn = document.getElementById(`admin-tab-${t}`);
+            if (btn) {
+                btn.onclick = () => App.navigate(`/admin/${t}`);
+                if (t === tab) btn.classList.add('active');
+            }
+        });
+        
+        const contentDiv = document.getElementById('admin-content');
+        
+        if (tab === 'servers') App.renderAdminServers(contentDiv);
+        else if (tab === 'users') App.renderAdminUsers(contentDiv);
+        else if (tab === 'config') App.renderAdminConfig(contentDiv);
+    },
+    
+    renderAdminServers: (container) => {
+        const tmpl = document.getElementById('admin-servers-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
         let currentPage = 1;
+        let searchTerm = '';
         
         const loadServers = async (page) => {
-             try {
-                const r = await fetch(`/api/admin/servers?page=${page}&limit=10`, {
+            try {
+                const url = `/api/admin/servers?page=${page}&limit=10${searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : ''}`;
+                const r = await fetch(url, {
                     headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                 });
-                if (r.status === 403) return; 
+                if (r.status === 403) return;
                 const data = await r.json();
                 const tbody = document.getElementById('admin-server-list');
                 tbody.innerHTML = '';
                 
+                if (data.servers.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No servers found</td></tr>';
+                    return;
+                }
+                
                 data.servers.forEach(s => {
                     const tr = document.createElement('tr');
+                    let statusBadge = s.suspended 
+                        ? '<span class="badge suspended">SUSPENDED</span>'
+                        : `<span class="badge ${s.isRunning ? 'running' : 'stopped'}">${s.isRunning ? 'RUNNING' : 'STOPPED'}</span>`;
+                    
                     tr.innerHTML = `
-                        <td><strong>${s.name}</strong> <br><small class="text-muted">${s.id}</small></td>
+                        <td>
+                            <strong>${s.name}</strong>
+                            <br><small class="text-muted">${s.id}</small>
+                        </td>
                         <td>${s.ownerName}</td>
-                        <td><span class="badge ${s.isRunning ? 'running' : 'stopped'}">${s.isRunning ? 'RUNNING' : 'STOPPED'}</span></td>
+                        <td>${statusBadge}</td>
                         <td>${s.ram} MB</td>
                         <td style="text-align:right">
-                            <button class="btn btn-sm btn-accent manage-btn">Manage</button>
-                            <button class="btn btn-sm btn-danger del-btn">Delete</button>
+                            <button class="btn btn-sm btn-secondary edit-btn" title="Edit">
+                                <span class="material-symbols-outlined icon-sm">edit</span>
+                            </button>
+                            <button class="btn btn-sm btn-accent manage-btn" title="Manage">
+                                <span class="material-symbols-outlined icon-sm">terminal</span>
+                            </button>
                         </td>
                     `;
+                    tr.querySelector('.edit-btn').onclick = () => App.openServerEditModal(s, () => loadServers(currentPage));
                     tr.querySelector('.manage-btn').onclick = () => App.navigate(`/server/${s.id}/console`);
-                    tr.querySelector('.del-btn').onclick = async () => {
-                        if(!confirm(`Delete server ${s.name}?`)) return;
-                        await fetch(`/api/server/${s.id}`, {
-                            method: 'DELETE',
-                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-                        });
-                        loadServers(currentPage);
-                    };
                     tbody.appendChild(tr);
                 });
-
-                document.getElementById('page-info').textContent = `Page ${data.page} of ${data.totalPages}`;
+                
+                document.getElementById('page-info').textContent = `Page ${data.page} of ${data.totalPages || 1}`;
                 document.getElementById('prev-page').disabled = data.page <= 1;
                 document.getElementById('next-page').disabled = data.page >= data.totalPages;
                 
                 document.getElementById('prev-page').onclick = () => loadServers(data.page - 1);
                 document.getElementById('next-page').onclick = () => loadServers(data.page + 1);
                 currentPage = data.page;
-             } catch (e) {
-                 console.error(e);
-             }
+            } catch (e) { console.error(e); }
         };
+        
+        // Search handler
+        let searchTimeout;
+        document.getElementById('server-search').addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                searchTerm = e.target.value;
+                loadServers(1);
+            }, 300);
+        });
+        
+        loadServers(1);
+    },
+    
+    renderAdminUsers: (container) => {
+        const tmpl = document.getElementById('admin-users-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
         
         const loadUsers = async () => {
             try {
                 const r = await fetch('/api/admin/users', {
-                     headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                 });
                 if (r.status === 403) return;
                 const users = await r.json();
                 const tbody = document.getElementById('admin-user-list');
                 tbody.innerHTML = '';
+                
                 users.forEach(u => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = `<td>${u.username}</td><td>${u.role}</td><td>${new Date(u.created_at).toLocaleDateString()}</td>`;
+                    let statusBadge = u.suspended 
+                        ? '<span class="badge suspended">SUSPENDED</span>'
+                        : '<span class="badge running">ACTIVE</span>';
+                    let roleBadge = `<span class="badge ${u.role}">${u.role.toUpperCase()}</span>`;
+                    
+                    tr.innerHTML = `
+                        <td>
+                            <strong>${u.username}</strong>
+                            <br><small class="text-muted">${u.id}</small>
+                        </td>
+                        <td>${roleBadge}</td>
+                        <td>${u.serverCount}</td>
+                        <td>${u.totalRam} MB</td>
+                        <td>${statusBadge}</td>
+                        <td style="text-align:right">
+                            <button class="btn btn-sm btn-secondary edit-btn" title="Edit">
+                                <span class="material-symbols-outlined icon-sm">edit</span>
+                            </button>
+                        </td>
+                    `;
+                    tr.querySelector('.edit-btn').onclick = () => App.openUserEditModal(u.id, loadUsers);
                     tbody.appendChild(tr);
                 });
             } catch (e) { console.error(e); }
         };
-
-        loadServers(1);
+        
         loadUsers();
+    },
+    
+    renderAdminConfig: async (container) => {
+        const tmpl = document.getElementById('admin-config-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        // Load current config
+        try {
+            const [configRes, statsRes] = await Promise.all([
+                fetch('/api/admin/config', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }),
+                fetch('/api/admin/stats', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+            ]);
+            
+            const config = await configRes.json();
+            const stats = await statsRes.json();
+            
+            document.getElementById('cfg-max-servers').value = config.limits?.maxServers || 3;
+            document.getElementById('cfg-max-ram').value = config.limits?.maxRam || 1024;
+            document.getElementById('cfg-max-storage').value = config.limits?.maxStorage || 1024;
+            
+            document.getElementById('cfg-port').textContent = config.port || 3000;
+            document.getElementById('cfg-total-users').textContent = stats.totalUsers;
+            document.getElementById('cfg-total-servers').textContent = stats.totalServers;
+            document.getElementById('cfg-running').textContent = stats.runningServers;
+        } catch (e) { console.error(e); }
+        
+        // Save config
+        document.getElementById('config-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            
+            try {
+                const r = await fetch('/api/admin/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({
+                        limits: {
+                            maxServers: parseInt(document.getElementById('cfg-max-servers').value),
+                            maxRam: parseInt(document.getElementById('cfg-max-ram').value),
+                            maxStorage: parseInt(document.getElementById('cfg-max-storage').value)
+                        }
+                    })
+                });
+                
+                if (r.ok) {
+                    document.getElementById('config-success').classList.remove('hidden');
+                    setTimeout(() => document.getElementById('config-success').classList.add('hidden'), 3000);
+                }
+            } catch (e) { console.error(e); }
+            
+            btn.disabled = false;
+        };
+    },
+    
+    openUserEditModal: async (userId, onSave) => {
+        // Fetch user data
+        const r = await fetch(`/api/admin/user/${userId}`, {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        if (!r.ok) return alert('Failed to load user');
+        const user = await r.json();
+        
+        const tmpl = document.getElementById('user-edit-template').content.cloneNode(true);
+        document.body.appendChild(tmpl);
+        
+        const overlay = document.querySelector('.editor-overlay');
+        
+        document.getElementById('edit-user-title').textContent = `Edit: ${user.username}`;
+        document.getElementById('edit-role').value = user.role;
+        document.getElementById('edit-suspended').checked = user.suspended;
+        document.getElementById('edit-suspend-reason').value = user.suspendReason || '';
+        
+        if (user.limits) {
+            document.getElementById('edit-limit-servers').value = user.limits.maxServers || '';
+            document.getElementById('edit-limit-ram').value = user.limits.maxRam || '';
+            document.getElementById('edit-limit-storage').value = user.limits.maxStorage || '';
+        }
+        
+        // Show user servers
+        const serversList = document.getElementById('user-servers-list');
+        if (user.servers && user.servers.length > 0) {
+            serversList.innerHTML = user.servers.map(s => `
+                <div style="padding: 0.5rem; background: var(--bg-app); border-radius: 6px; margin-bottom: 0.5rem;">
+                    <strong>${s.name}</strong> - ${s.ram} MB
+                    <span class="badge ${s.suspended ? 'suspended' : (s.isRunning ? 'running' : 'stopped')}" style="margin-left: 0.5rem;">
+                        ${s.suspended ? 'SUSPENDED' : (s.isRunning ? 'RUNNING' : 'STOPPED')}
+                    </span>
+                </div>
+            `).join('');
+        } else {
+            serversList.textContent = 'No servers';
+        }
+        
+        // Close button
+        document.getElementById('btn-close-user-edit').onclick = () => overlay.remove();
+        
+        // Delete button
+        document.getElementById('btn-delete-user').onclick = async () => {
+            if (!confirm(`Delete user ${user.username}? This will delete all their servers!`)) return;
+            
+            const dr = await fetch(`/api/admin/user/${userId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            if (dr.ok) {
+                overlay.remove();
+                onSave();
+            } else {
+                const data = await dr.json();
+                alert('Error: ' + data.error);
+            }
+        };
+        
+        // Save form
+        document.getElementById('user-edit-form').onsubmit = async (e) => {
+            e.preventDefault();
+            
+            const limits = {};
+            const maxServers = document.getElementById('edit-limit-servers').value;
+            const maxRam = document.getElementById('edit-limit-ram').value;
+            const maxStorage = document.getElementById('edit-limit-storage').value;
+            
+            if (maxServers) limits.maxServers = parseInt(maxServers);
+            if (maxRam) limits.maxRam = parseInt(maxRam);
+            if (maxStorage) limits.maxStorage = parseInt(maxStorage);
+            
+            const payload = {
+                role: document.getElementById('edit-role').value,
+                suspended: document.getElementById('edit-suspended').checked,
+                suspendReason: document.getElementById('edit-suspend-reason').value,
+                limits: Object.keys(limits).length > 0 ? limits : null
+            };
+            
+            const sr = await fetch(`/api/admin/user/${userId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            if (sr.ok) {
+                document.getElementById('user-edit-success').classList.remove('hidden');
+                setTimeout(() => {
+                    overlay.remove();
+                    onSave();
+                }, 500);
+            } else {
+                const data = await sr.json();
+                document.getElementById('user-edit-error').textContent = data.error;
+                document.getElementById('user-edit-error').classList.remove('hidden');
+            }
+        };
+    },
+    
+    openServerEditModal: async (server, onSave) => {
+        const tmpl = document.getElementById('server-edit-template').content.cloneNode(true);
+        document.body.appendChild(tmpl);
+        
+        const overlay = document.querySelector('.editor-overlay');
+        
+        document.getElementById('edit-server-title').textContent = `Edit: ${server.name}`;
+        document.getElementById('edit-server-name').value = server.name;
+        document.getElementById('edit-server-desc').value = server.description || '';
+        document.getElementById('edit-server-ram').value = server.ram;
+        document.getElementById('edit-server-disk').value = server.diskSize;
+        document.getElementById('edit-server-suspended').checked = server.suspended || false;
+        document.getElementById('edit-server-suspend-reason').value = server.suspendReason || '';
+        
+        // Close button
+        document.getElementById('btn-close-server-edit').onclick = () => overlay.remove();
+        
+        // Force stop button
+        document.getElementById('btn-force-stop').onclick = async () => {
+            if (!confirm('Force stop this server?')) return;
+            
+            await fetch(`/api/admin/server/${server.id}/force-stop`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            overlay.remove();
+            onSave();
+        };
+        
+        // Delete button
+        document.getElementById('btn-delete-server-admin').onclick = async () => {
+            if (!confirm(`Delete server ${server.name}? This cannot be undone!`)) return;
+            
+            const dr = await fetch(`/api/admin/server/${server.id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            if (dr.ok) {
+                overlay.remove();
+                onSave();
+            } else {
+                const data = await dr.json();
+                alert('Error: ' + data.error);
+            }
+        };
+        
+        // Save form
+        document.getElementById('server-edit-form').onsubmit = async (e) => {
+            e.preventDefault();
+            
+            const suspended = document.getElementById('edit-server-suspended').checked;
+            const suspendReason = document.getElementById('edit-server-suspend-reason').value;
+            
+            // First update server info
+            const payload = {
+                name: document.getElementById('edit-server-name').value,
+                description: document.getElementById('edit-server-desc').value,
+                ram: parseInt(document.getElementById('edit-server-ram').value),
+                diskSize: parseInt(document.getElementById('edit-server-disk').value)
+            };
+            
+            await fetch(`/api/admin/server/${server.id}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            // Then update suspension status
+            await fetch(`/api/admin/server/${server.id}/suspend`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                },
+                body: JSON.stringify({ suspended, reason: suspendReason })
+            });
+            
+            document.getElementById('server-edit-success').classList.remove('hidden');
+            setTimeout(() => {
+                overlay.remove();
+                onSave();
+            }, 500);
+        };
     }
 };
 
