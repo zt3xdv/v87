@@ -4,7 +4,7 @@ import path from "node:path";
 import net from "node:net";
 import { V86 } from "../main.js";
 import { NodeNetworkAdapter } from "../network_adapter.js";
-import { handle9p, set9pRoot } from "../9p_handler.js";
+import { create9pHandler } from "../9p_handler.js";
 import { LOG_NONE, LOG_ALL, LOG_BIOS, LOG_VIRTIO } from "../const.js";
 
 const TERM_YELLOW_BOLD = "\x1b[1;33m";
@@ -38,10 +38,11 @@ export class VMInstance {
         const biosPath = path.join(workspaceRoot, "vm/bios/seabios.bin");
         const vgaBiosPath = path.join(workspaceRoot, "vm/bios/vgabios.bin");
         const bzimagePath = path.join(workspaceRoot, "vm/kernel/linux.bin");
+        const initrdPath = path.join(workspaceRoot, "vm/boot.img");
         
         const rootPath = path.join(this.cwd, "root");
         const permsPath = path.join(this.cwd, "permissions.json");
-        set9pRoot(rootPath, permsPath);
+        const handle9p = create9pHandler(rootPath, permsPath);
         
         const origCwd = process.cwd();
         try {
@@ -52,6 +53,7 @@ export class VMInstance {
             bios: { url: biosPath },
             vga_bios: { url: vgaBiosPath },
             bzimage: { url: bzimagePath },
+            initrd: { url: initrdPath },
             filesystem: {
                 handle9p: handle9p
             },
