@@ -7,9 +7,14 @@ async function getDirSize(dir) {
     const stats = await Promise.all(
         files.map(async file => {
             const filePath = path.join(dir, file);
-            const stat = await fs.stat(filePath);
-            if (stat.isDirectory()) return getDirSize(filePath);
-            return stat.size;
+            try {
+                const stat = await fs.lstat(filePath);
+                if (stat.isSymbolicLink()) return 0;
+                if (stat.isDirectory()) return getDirSize(filePath);
+                return stat.size;
+            } catch (e) {
+                return 0;
+            }
         })
     );
     return stats.reduce((acc, size) => acc + size, 0);
