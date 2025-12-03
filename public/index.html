@@ -691,6 +691,75 @@
         </div>
     </template>
     
+    <!-- SERVER PACKAGES -->
+    <template id="server-packages-template">
+        <div class="card">
+            <div class="card-header">
+                <span class="d-flex align-center gap-2">
+                    <span class="material-symbols-outlined icon-sm">inventory_2</span>
+                    Linux Packages (i386)
+                </span>
+            </div>
+            <div class="card-body">
+                <div class="d-flex gap-2 mb-4 flex-wrap">
+                    <input type="text" id="pkg-search" class="form-control" placeholder="Search packages..." style="flex: 1; min-width: 200px;">
+                    <button id="btn-search-pkg" class="btn btn-accent">
+                        <span class="material-symbols-outlined icon-sm">search</span>
+                        Search
+                    </button>
+                </div>
+                
+                <div id="pkg-error" class="alert alert-danger hidden"></div>
+                <div id="pkg-success" class="alert alert-success hidden"></div>
+                
+                <div id="pkg-loading" class="text-center text-muted p-4 hidden">
+                    <span class="material-symbols-outlined" style="font-size: 2rem; animation: spin 1s linear infinite;">sync</span>
+                    <p class="mt-2 mb-0">Searching packages...</p>
+                </div>
+                
+                <div id="pkg-results">
+                    <div class="text-center text-muted p-4">
+                        <span class="material-symbols-outlined" style="font-size: 3rem; opacity: 0.3; display: block; margin-bottom: 1rem;">inventory_2</span>
+                        <p class="mb-2">Search for packages to install</p>
+                        <small>Packages are fetched from Debian/Ubuntu i386 repositories</small>
+                    </div>
+                </div>
+                
+                <div id="pkg-pagination" class="d-flex justify-between mt-4 align-center hidden">
+                    <button id="pkg-prev" class="btn btn-sm btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">chevron_left</span>
+                        Previous
+                    </button>
+                    <span id="pkg-page-info" class="text-muted text-sm">Page 1</span>
+                    <button id="pkg-next" class="btn btn-sm btn-secondary">
+                        Next
+                        <span class="material-symbols-outlined icon-sm">chevron_right</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <span class="d-flex align-center gap-2">
+                    <span class="material-symbols-outlined icon-sm">download_done</span>
+                    Installed Packages
+                </span>
+                <button id="btn-refresh-installed" class="btn btn-sm btn-secondary">
+                    <span class="material-symbols-outlined icon-sm">refresh</span>
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="installed-pkg-list">
+                    <div class="text-center text-muted p-4">
+                        <span class="material-symbols-outlined" style="font-size: 2rem; opacity: 0.3;">hourglass_empty</span>
+                        <p class="mt-2 mb-0">Loading installed packages...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <!-- SERVER EDIT MODAL (Admin) -->
     <template id="server-edit-template">
         <div class="editor-overlay">

@@ -108,6 +108,7 @@ const App = {
              createHeader('Server Management');
              createItem('Console', `/server/${serverId}/console`, view === 'console', 'terminal');
              createItem('Files', `/server/${serverId}/files`, view === 'files', 'folder');
+             createItem('Packages', `/server/${serverId}/packages`, view === 'packages', 'inventory_2');
              createItem('Startup', `/server/${serverId}/startup`, view === 'startup', 'settings_power');
              createItem('Settings', `/server/${serverId}/settings`, view === 'settings', 'settings');
         }
@@ -136,7 +137,7 @@ const App = {
             App.cleanupTerminal();
         }
 
-        const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|files|startup|settings|creating)$/);
+        const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|files|packages|startup|settings|creating)$/);
 
         // Check for admin routes
         const adminMatch = path.match(/^\/admin(?:\/(servers|users|config))?$/);
@@ -304,6 +305,7 @@ const App = {
             container.appendChild(tmpl);
             
             const list = document.getElementById('server-list');
+            if (data.servers != []) list.innerHTML = "";
             data.servers.forEach(s => {
                 const item = document.createElement('div');
                 item.className = 'server-item';
@@ -450,6 +452,8 @@ const App = {
             App.renderServerConsole(contentDiv, id, isRunning, updateStatus, server);
         } else if (view === 'files') {
             App.renderServerFiles(contentDiv, id);
+        } else if (view === 'packages') {
+            App.renderServerPackages(contentDiv, id);
         } else if (view === 'startup') {
             App.renderServerStartup(contentDiv, id, server);
         } else if (view === 'settings') {
@@ -1047,6 +1051,241 @@ const App = {
                 btn.disabled = false;
             }
         };
+    },
+
+    // =====================
+    // SERVER PACKAGES
+    // =====================
+
+    renderServerPackages: (container, id) => {
+        const tmpl = document.getElementById('server-packages-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+
+        let currentPage = 1;
+        let currentSearch = '';
+        let totalPages = 1;
+        let allPackages = [];
+
+        const showError = (msg) => {
+            const el = document.getElementById('pkg-error');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 5000);
+        };
+
+        const showSuccess = (msg) => {
+            const el = document.getElementById('pkg-success');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 5000);
+        };
+
+        const loadInstalledPackages = async () => {
+            const listEl = document.getElementById('installed-pkg-list');
+            try {
+                const r = await fetch(`/api/server/${id}/packages/installed`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const data = await r.json();
+                
+                if (!data.packages || data.packages.length === 0) {
+                    listEl.innerHTML = '<div class="text-center text-muted p-4">No packages installed yet</div>';
+                    return;
+                }
+
+                listEl.innerHTML = data.packages.map(pkg => `
+                    <div class="d-flex justify-between align-center p-2" style="background: var(--bg-app); border-radius: 6px; margin-bottom: 0.5rem;">
+                        <div>
+                            <strong>${pkg.name}</strong>
+                            <small class="text-muted d-block">${pkg.version || ''}</small>
+                        </div>
+                        <button class="btn btn-sm btn-danger uninstall-btn" data-pkg="${pkg.name}">
+                            <span class="material-symbols-outlined icon-sm">delete</span>
+                        </button>
+                    </div>
+                `).join('');
+
+                listEl.querySelectorAll('.uninstall-btn').forEach(btn => {
+                    btn.onclick = async () => {
+                        const pkgName = btn.dataset.pkg;
+                        if (!confirm(`Uninstall ${pkgName}?`)) return;
+                        
+                        btn.disabled = true;
+                        btn.innerHTML = '<span class="material-symbols-outlined icon-sm" style="animation: spin 1s linear infinite;">sync</span>';
+                        
+                        try {
+                            const r = await fetch(`/api/server/${id}/packages/uninstall`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                                },
+                                body: JSON.stringify({ package: pkgName })
+                            });
+                            const data = await r.json();
+                            if (data.success) {
+                                showSuccess(`${pkgName} uninstalled successfully`);
+                                loadInstalledPackages();
+                            } else {
+                                showError(data.error || 'Failed to uninstall');
+                            }
+                        } catch (e) {
+                            showError('Error uninstalling package');
+                        }
+                    };
+                });
+            } catch (e) {
+                listEl.innerHTML = '<div class="text-center text-danger p-4">Error loading installed packages</div>';
+            }
+        };
+
+        const searchPackages = async (query, page = 1) => {
+            if (!query.trim()) return;
+            
+            const loading = document.getElementById('pkg-loading');
+            const results = document.getElementById('pkg-results');
+            const pagination = document.getElementById('pkg-pagination');
+            
+            loading.classList.remove('hidden');
+            results.innerHTML = '';
+            pagination.classList.add('hidden');
+
+            try {
+                const r = await fetch(`/api/server/${id}/packages/search?q=${encodeURIComponent(query)}&page=${page}`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const data = await r.json();
+                
+                loading.classList.add('hidden');
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                allPackages = data.packages || [];
+                totalPages = data.totalPages || 1;
+                currentPage = data.page || 1;
+
+                if (allPackages.length === 0) {
+                    results.innerHTML = '<div class="text-center text-muted p-4">No packages found</div>';
+                    return;
+                }
+
+                results.innerHTML = `
+                    <div style="overflow-x: auto;">
+                        <table class="file-table">
+                            <thead>
+                                <tr>
+                                    <th>Package</th>
+                                    <th>Version</th>
+                                    <th>Size</th>
+                                    <th style="text-align: right;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pkg-table-body"></tbody>
+                        </table>
+                    </div>
+                `;
+
+                const tbody = document.getElementById('pkg-table-body');
+                allPackages.forEach(pkg => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>
+                            <strong>${pkg.name}</strong>
+                            <br><small class="text-muted">${pkg.description || ''}</small>
+                        </td>
+                        <td>${pkg.version || '-'}</td>
+                        <td>${pkg.size || '-'}</td>
+                        <td style="text-align: right;">
+                            <button class="btn btn-sm btn-success install-btn">
+                                <span class="material-symbols-outlined icon-sm">download</span>
+                                Install
+                            </button>
+                        </td>
+                    `;
+                    
+                    tr.querySelector('.install-btn').onclick = async (e) => {
+                        const btn = e.target.closest('.install-btn');
+                        btn.disabled = true;
+                        btn.innerHTML = '<span class="material-symbols-outlined icon-sm" style="animation: spin 1s linear infinite;">sync</span> Installing...';
+                        
+                        try {
+                            const r = await fetch(`/api/server/${id}/packages/install`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                                },
+                                body: JSON.stringify({ package: pkg.name, url: pkg.url })
+                            });
+                            const data = await r.json();
+                            
+                            if (data.success) {
+                                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">check</span> Installed';
+                                btn.classList.remove('btn-success');
+                                btn.classList.add('btn-secondary');
+                                showSuccess(`${pkg.name} installed successfully`);
+                                loadInstalledPackages();
+                            } else {
+                                btn.disabled = false;
+                                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">download</span> Install';
+                                showError(data.error || 'Failed to install');
+                            }
+                        } catch (e) {
+                            btn.disabled = false;
+                            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">download</span> Install';
+                            showError('Error installing package');
+                        }
+                    };
+                    
+                    tbody.appendChild(tr);
+                });
+
+                if (totalPages > 1) {
+                    pagination.classList.remove('hidden');
+                    document.getElementById('pkg-page-info').textContent = `Page ${currentPage} of ${totalPages}`;
+                    document.getElementById('pkg-prev').disabled = currentPage <= 1;
+                    document.getElementById('pkg-next').disabled = currentPage >= totalPages;
+                }
+
+            } catch (e) {
+                loading.classList.add('hidden');
+                showError('Error searching packages');
+            }
+        };
+
+        // Event handlers
+        document.getElementById('btn-search-pkg').onclick = () => {
+            currentSearch = document.getElementById('pkg-search').value;
+            searchPackages(currentSearch, 1);
+        };
+
+        document.getElementById('pkg-search').onkeypress = (e) => {
+            if (e.key === 'Enter') {
+                currentSearch = e.target.value;
+                searchPackages(currentSearch, 1);
+            }
+        };
+
+        document.getElementById('pkg-prev').onclick = () => {
+            if (currentPage > 1) {
+                searchPackages(currentSearch, currentPage - 1);
+            }
+        };
+
+        document.getElementById('pkg-next').onclick = () => {
+            if (currentPage < totalPages) {
+                searchPackages(currentSearch, currentPage + 1);
+            }
+        };
+
+        document.getElementById('btn-refresh-installed').onclick = loadInstalledPackages;
+
+        // Load installed packages on init
+        loadInstalledPackages();
     },
 
     // =====================

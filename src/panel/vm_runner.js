@@ -49,6 +49,7 @@ export class VMInstance {
             process.chdir(this.cwd);
         } catch(e) {}
         
+        this.onOutput(`${TERM_YELLOW_BOLD}[v87 Daemon] Starting up emulator...${TERM_RESET}\n`);
         this.emulator = new V86({
             bios: { url: biosPath },
             vga_bios: { url: vgaBiosPath },
@@ -61,14 +62,7 @@ export class VMInstance {
             memory_size: this.memorySize * 1024 * 1024,
             wasm_path: wasmPath,
             autostart: true,
-            cmdline: [
-                "rw",
-                "init=/init",
-                "console=ttyS0",
-                "rootfstype=9p",
-                "rootflags=trans=virtio,version=9p2000.L,cache=loose",
-                "root=host9p"
-            ].join(" "),
+            cmdline: "rw init=/init console=ttyS0",
             disable_mouse: true,
             disable_keyboard: false
         });
@@ -85,6 +79,7 @@ export class VMInstance {
         });
         
         this.running = true;
+        this.onOutput(`Server marked as started\n`);
         this._startStats();
         
         return this;
@@ -129,7 +124,7 @@ export class VMInstance {
                     
                     if (elapsed > 0 && this.lastCycleCount > 0) {
                         ips = Math.round((cycles - this.lastCycleCount) / elapsed);
-                        cpuPercent = Math.min(100, Math.round(ips / 1000000));
+                        cpuPercent = ips / 10000;
                     }
                     
                     this.lastCycleCount = cycles;
@@ -179,12 +174,12 @@ export class VMInstance {
 
 if (process.argv[1] && process.argv[1].includes('vm_runner.js')) {
     const args = process.argv.slice(2);
-    const memorySize = parseInt(args[0]) || 256;
-    
-    console.log(`${TERM_YELLOW_BOLD}[v87 Daemon] Starting up...${TERM_RESET}`);
+    const memorySize = parseInt(args[0]) || 128;
+    const cwd = args[1];
     
     const vm = new VMInstance({
         memorySize,
+        cwd,
         onOutput: (chr) => process.stdout.write(chr),
         onStats: (stats) => {
             if (process.send) {

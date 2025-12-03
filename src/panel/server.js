@@ -627,6 +627,309 @@ app.post('/api/server/:id/file-action', requireAuth, async (req, res) => {
 });
 
 // =====================
+// PACKAGE MANAGEMENT
+// =====================
+
+const DEBIAN_PACKAGES_URL = 'https://packages.debian.org/search';
+const PACKAGES_DB_FILE = 'installed_packages.json';
+
+// Search packages from Debian repository (i386)
+app.get('/api/server/:id/packages/search', requireAuth, async (req, res) => {
+    const serverId = req.params.id;
+    const server = db.getServer(serverId);
+    if (!server) return res.status(404).json({ error: 'Not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+    
+    const query = req.query.q || '';
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    
+    if (!query.trim()) {
+        return res.json({ packages: [], page: 1, totalPages: 0 });
+    }
+    
+    try {
+        // Use Debian packages API or parse packages list
+        const https = await import('https');
+        const searchUrl = `https://sources.debian.org/api/search/${encodeURIComponent(query)}/?suite=bookworm`;
+        
+        const fetchData = (url) => new Promise((resolve, reject) => {
+            https.get(url, (response) => {
+                let data = '';
+                response.on('data', chunk => data += chunk);
+                response.on('end', () => resolve(data));
+                response.on('error', reject);
+            }).on('error', reject);
+        });
+        
+        const data = await fetchData(searchUrl);
+        let results = [];
+        
+        try {
+            const json = JSON.parse(data);
+            if (json.results && json.results.other) {
+                results = json.results.other.map(pkg => ({
+                    name: pkg.name,
+                    description: '',
+                    version: '',
+                    size: '',
+                    url: `https://packages.debian.org/bookworm/i386/${pkg.name}/download`
+                }));
+            }
+            if (json.results && json.results.exact) {
+                results.unshift({
+                    name: json.results.exact.name,
+                    description: '',
+                    version: '',
+                    size: '',
+                    url: `https://packages.debian.org/bookworm/i386/${json.results.exact.name}/download`
+                });
+            }
+        } catch (e) {
+            // Fallback: try to fetch from packages.debian.org
+            const altUrl = `https://packages.debian.org/search?keywords=${encodeURIComponent(query)}&searchon=names&suite=bookworm&section=all&arch=i386`;
+            const html = await fetchData(altUrl);
+            
+            // Parse HTML to extract package names (basic parsing)
+            const packageMatches = html.match(/<a href="\/bookworm\/([^"]+)"[^>]*>([^<]+)<\/a>/g) || [];
+            const seen = new Set();
+            
+            packageMatches.forEach(match => {
+                const nameMatch = match.match(/>([^<]+)</);
+                if (nameMatch && !seen.has(nameMatch[1])) {
+                    seen.add(nameMatch[1]);
+                    results.push({
+                        name: nameMatch[1],
+                        description: '',
+                        version: '',
+                        size: '',
+                        url: `https://packages.debian.org/bookworm/i386/${nameMatch[1]}/download`
+                    });
+                }
+            });
+        }
+        
+        // Pagination
+        const startIndex = (page - 1) * limit;
+        const paginatedResults = results.slice(startIndex, startIndex + limit);
+        const totalPages = Math.ceil(results.length / limit);
+        
+        res.json({
+            packages: paginatedResults,
+            page,
+            totalPages,
+            total: results.length
+        });
+        
+    } catch (e) {
+        log(`Package search error: ${e.message}`);
+        res.status(500).json({ error: 'Failed to search packages' });
+    }
+});
+
+// Get installed packages
+app.get('/api/server/:id/packages/installed', requireAuth, async (req, res) => {
+    const serverId = req.params.id;
+    const server = db.getServer(serverId);
+    if (!server) return res.status(404).json({ error: 'Not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+    
+    const owner = db.findUserById(server.ownerId);
+    const serverDir = path.join(USER_DATA_DIR, owner.username, 'servers', serverId);
+    const pkgDbPath = path.join(serverDir, PACKAGES_DB_FILE);
+    
+    try {
+        if (await fs.pathExists(pkgDbPath)) {
+            const data = await fs.readJson(pkgDbPath);
+            res.json({ packages: data.packages || [] });
+        } else {
+            res.json({ packages: [] });
+        }
+    } catch (e) {
+        res.json({ packages: [] });
+    }
+});
+
+// Install package
+app.post('/api/server/:id/packages/install', requireAuth, async (req, res) => {
+    const serverId = req.params.id;
+    const { package: pkgName, url } = req.body;
+    
+    const server = db.getServer(serverId);
+    if (!server) return res.status(404).json({ error: 'Not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+    
+    if (!pkgName) return res.status(400).json({ error: 'Package name required' });
+    
+    const owner = db.findUserById(server.ownerId);
+    const serverDir = path.join(USER_DATA_DIR, owner.username, 'servers', serverId);
+    const rootDir = path.join(serverDir, 'root');
+    const pkgDbPath = path.join(serverDir, PACKAGES_DB_FILE);
+    
+    try {
+        // Check quota for non-admin
+        if (req.user.role !== 'admin') {
+            const user = db.findUserById(req.user.id);
+            const userLimits = getUserLimits(user);
+            const currentSize = await getDirSize(path.join(USER_DATA_DIR, owner.username));
+            const maxBytes = userLimits.maxStorage * 1024 * 1024;
+            if (currentSize > maxBytes * 0.95) {
+                return res.status(400).json({ error: 'Storage quota nearly exceeded' });
+            }
+        }
+        
+        // Fetch the package download page to get real .deb URL
+        const https = await import('https');
+        const http = await import('http');
+        
+        const fetchUrl = (url) => new Promise((resolve, reject) => {
+            const protocol = url.startsWith('https') ? https : http;
+            protocol.get(url, (response) => {
+                if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                    return fetchUrl(response.headers.location).then(resolve).catch(reject);
+                }
+                let data = '';
+                response.on('data', chunk => data += chunk);
+                response.on('end', () => resolve({ data, statusCode: response.statusCode }));
+                response.on('error', reject);
+            }).on('error', reject);
+        });
+        
+        // Get the download page
+        const downloadPageUrl = `https://packages.debian.org/bookworm/i386/${pkgName}/download`;
+        const { data: html } = await fetchUrl(downloadPageUrl);
+        
+        // Extract .deb URL from the page
+        const debUrlMatch = html.match(/href="(https?:\/\/[^"]+\.deb)"/i) || 
+                           html.match(/href="(http:\/\/ftp\.[^"]+\.deb)"/i);
+        
+        if (!debUrlMatch) {
+            return res.status(400).json({ error: 'Could not find package download URL' });
+        }
+        
+        const debUrl = debUrlMatch[1];
+        log(`Downloading package ${pkgName} from ${debUrl}`);
+        
+        // Download the .deb file
+        const tempDebPath = path.join(serverDir, `${pkgName}.deb`);
+        
+        const downloadFile = (url, dest) => new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(dest);
+            const protocol = url.startsWith('https') ? https : http;
+            
+            const download = (downloadUrl) => {
+                protocol.get(downloadUrl, (response) => {
+                    if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        return download(response.headers.location);
+                    }
+                    response.pipe(file);
+                    file.on('finish', () => {
+                        file.close();
+                        resolve();
+                    });
+                }).on('error', (err) => {
+                    fs.unlink(dest, () => {});
+                    reject(err);
+                });
+            };
+            
+            download(url);
+        });
+        
+        await downloadFile(debUrl, tempDebPath);
+        
+        // Extract .deb using ar and tar
+        const { exec } = await import('child_process');
+        const util = await import('util');
+        const execAsync = util.promisify(exec);
+        
+        const extractDir = path.join(serverDir, 'pkg_extract');
+        await fs.ensureDir(extractDir);
+        
+        try {
+            // Extract the .deb (ar archive)
+            await execAsync(`cd "${extractDir}" && ar x "${tempDebPath}"`);
+            
+            // Extract data.tar.* to root
+            const dataFiles = await fs.readdir(extractDir);
+            const dataTar = dataFiles.find(f => f.startsWith('data.tar'));
+            
+            if (dataTar) {
+                const dataTarPath = path.join(extractDir, dataTar);
+                if (dataTar.endsWith('.xz')) {
+                    await execAsync(`cd "${rootDir}" && tar -xJf "${dataTarPath}"`);
+                } else if (dataTar.endsWith('.gz')) {
+                    await execAsync(`cd "${rootDir}" && tar -xzf "${dataTarPath}"`);
+                } else if (dataTar.endsWith('.zst')) {
+                    await execAsync(`cd "${rootDir}" && tar --zstd -xf "${dataTarPath}"`);
+                } else {
+                    await execAsync(`cd "${rootDir}" && tar -xf "${dataTarPath}"`);
+                }
+            }
+            
+            // Update installed packages DB
+            let pkgDb = { packages: [] };
+            if (await fs.pathExists(pkgDbPath)) {
+                pkgDb = await fs.readJson(pkgDbPath);
+            }
+            
+            // Check if already installed
+            if (!pkgDb.packages.find(p => p.name === pkgName)) {
+                pkgDb.packages.push({
+                    name: pkgName,
+                    version: '',
+                    installedAt: new Date().toISOString()
+                });
+                await fs.writeJson(pkgDbPath, pkgDb);
+            }
+            
+            log(`Package ${pkgName} installed to server ${serverId}`);
+            res.json({ success: true });
+            
+        } finally {
+            // Cleanup
+            await fs.remove(extractDir);
+            await fs.remove(tempDebPath);
+        }
+        
+    } catch (e) {
+        log(`Package install error: ${e.message}`);
+        res.status(500).json({ error: 'Failed to install package: ' + e.message });
+    }
+});
+
+// Uninstall package
+app.post('/api/server/:id/packages/uninstall', requireAuth, async (req, res) => {
+    const serverId = req.params.id;
+    const { package: pkgName } = req.body;
+    
+    const server = db.getServer(serverId);
+    if (!server) return res.status(404).json({ error: 'Not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+    
+    if (!pkgName) return res.status(400).json({ error: 'Package name required' });
+    
+    const owner = db.findUserById(server.ownerId);
+    const serverDir = path.join(USER_DATA_DIR, owner.username, 'servers', serverId);
+    const pkgDbPath = path.join(serverDir, PACKAGES_DB_FILE);
+    
+    try {
+        if (await fs.pathExists(pkgDbPath)) {
+            const pkgDb = await fs.readJson(pkgDbPath);
+            pkgDb.packages = pkgDb.packages.filter(p => p.name !== pkgName);
+            await fs.writeJson(pkgDbPath, pkgDb);
+        }
+        
+        log(`Package ${pkgName} uninstalled from server ${serverId}`);
+        res.json({ success: true });
+        
+    } catch (e) {
+        log(`Package uninstall error: ${e.message}`);
+        res.status(500).json({ error: 'Failed to uninstall package' });
+    }
+});
+
+// =====================
 // ADMIN ROUTES
 // =====================
 

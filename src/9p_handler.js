@@ -139,12 +139,18 @@ export function create9pHandler(rootPath, permsPath) {
                     break;
 
                 case 104: // Tattach
+                    // 9P2000.L: fid[4] afid[4] uname[s] aname[s] n_uname[4]
+                    // Note: some clients don't send n_uname, parse it only if data remains
                     const [fid, afid, uname, aname] = Unmarshall(["w", "w", "s", "s"], reqBuf, state);
+                    let n_uname = 0;
+                    if (state.offset < size) {
+                        [n_uname] = Unmarshall(["w"], reqBuf, state);
+                    }
                     if (!fs.existsSync(ROOT)) {
                         fs.mkdirSync(ROOT, { recursive: true });
                     }
                     const stats = fs.statSync(ROOT);
-                    fids.set(fid, { path: ROOT, type: QTDIR });
+                    fids.set(fid, { path: ROOT, type: QTDIR, uid: n_uname });
                     sendReply(105, tag, ["Q"], [statToQid(stats)]);
                     break;
 
@@ -162,13 +168,21 @@ export function create9pHandler(rootPath, permsPath) {
                         break;
                     }
 
+                    const rootResolved = path.resolve(ROOT);
                     let currentPath = fidObj.path;
                     const qids = [];
                     let walkSuccess = true;
 
                     for (const name of wnames) {
-                        const nextPath = path.join(currentPath, name);
-                        if (!nextPath.startsWith(ROOT)) {
+                        // Resolve to get canonical path (handles .. correctly)
+                        const nextPath = path.resolve(currentPath, name);
+                        
+                        // Check confinement: must be inside ROOT or be ROOT itself
+                        if (nextPath !== rootResolved && !nextPath.startsWith(rootResolved + path.sep)) {
+                            // Trying to escape ROOT - treat ".." at root as staying at root
+                            if (name === ".." && currentPath === rootResolved) {
+                                continue; // Stay at root, don't add qid
+                            }
                             walkSuccess = false;
                             break;
                         }
@@ -258,9 +272,9 @@ export function create9pHandler(rootPath, permsPath) {
                     }
                     break;
 
-                case 112: // Tlopen (9P2000.L)
-                case 12:
-                    const [ofid, flags] = Unmarshall(["w", "w"], reqBuf, state);
+                case 112: // Topen (9P2000)
+                case 12: // Tlopen (9P2000.L)
+                    const [ofid, oflags] = Unmarshall(["w", "w"], reqBuf, state);
                     const oFidObj = fids.get(ofid);
                     if (!oFidObj) {
                         sendError(tag, "fid not found", ENOENT);
@@ -273,11 +287,16 @@ export function create9pHandler(rootPath, permsPath) {
                             oFidObj.dirEntries = fs.readdirSync(oFidObj.path);
                             oFidObj.dirIndex = 0;
                         } else {
-                            const fd = fs.openSync(oFidObj.path, flags & 3);
+                            // Convert Linux flags to Node.js
+                            const O_TRUNC = 0x200, O_APPEND = 0x400;
+                            let nodeFlags = oflags & 3; // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+                            if (oflags & O_TRUNC) nodeFlags |= fs.constants.O_TRUNC;
+                            if (oflags & O_APPEND) nodeFlags |= fs.constants.O_APPEND;
+                            const fd = fs.openSync(oFidObj.path, nodeFlags);
                             oFidObj.fd = fd;
                         }
                         const qid2 = statToQid(st);
-                        sendReply(13, tag, ["Q", "w"], [qid2, 8192]);
+                        sendReply(13, tag, ["Q", "w"], [qid2, 8192]); // Rlopen
                     } catch (e) {
                         sendError(tag, e.message, EIO);
                     }
@@ -383,6 +402,7 @@ export function create9pHandler(rootPath, permsPath) {
                     break;
                 
                 case 14: // Tlcreate
+                    // 9P2000.L: fid[4] name[s] flags[4] mode[4] gid[4]
                     const [crfid, crname, crflags, crmode, crgid] = Unmarshall(["w", "s", "w", "w", "w"], reqBuf, state);
                     const crFidObj = fids.get(crfid);
                     if (!crFidObj) {
@@ -391,7 +411,17 @@ export function create9pHandler(rootPath, permsPath) {
                     }
                     const newPath = path.join(crFidObj.path, crname);
                     try {
-                        const fd = fs.openSync(newPath, "w+");
+                        // Convert Linux open flags to Node.js flags
+                        let nodeFlags = 'w+';
+                        const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2;
+                        const O_TRUNC = 0x200, O_APPEND = 0x400;
+                        const accessMode = crflags & 3;
+                        if (accessMode === O_RDONLY) nodeFlags = 'r+';
+                        else if (accessMode === O_WRONLY) nodeFlags = 'w';
+                        else nodeFlags = 'w+';
+                        
+                        const fd = fs.openSync(newPath, nodeFlags, crmode & 0o777);
+                        setPerm(newPath, crmode & 0o7777, 0, crgid);
                         fids.set(crfid, { path: newPath, fd: fd, type: QTFILE });
                         const st = fs.statSync(newPath);
                         const qid = statToQid(st);
