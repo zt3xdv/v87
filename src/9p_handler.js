@@ -79,6 +79,16 @@ function readBinaryMetadata(filePath, decodeEntry) {
     return result;
 }
 
+// Fallback to read old JSON format
+function readJsonFallback(filePath) {
+    try {
+        if (fs.existsSync(filePath)) {
+            return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        }
+    } catch(e) {}
+    return {};
+}
+
 function writeBinaryMetadata(filePath, entries, encodeEntry) {
     const chunks = [MAGIC, Buffer.alloc(4)];
     const keys = Object.keys(entries);
@@ -115,37 +125,42 @@ export function create9pHandler(rootPath, serverDir) {
     let dirty = { perms: false, symlinks: false, types: false };
 
     function loadMetadata() {
-        // Load permissions
-        permsCache = readBinaryMetadata(
-            path.join(SERVER_DIR, 'permissions.bin'),
-            (buf) => ({
+        const binPerms = path.join(SERVER_DIR, 'permissions.bin');
+        const binSymlinks = path.join(SERVER_DIR, 'symlinks.bin');
+        const binDevices = path.join(SERVER_DIR, 'devices.bin');
+        const binTypes = path.join(SERVER_DIR, 'types.bin');
+        
+        // Try binary format first, fallback to JSON
+        if (fs.existsSync(binPerms)) {
+            permsCache = readBinaryMetadata(binPerms, (buf) => ({
                 mode: buf.readUInt16LE(0),
                 uid: buf.readUInt32LE(2),
                 gid: buf.readUInt32LE(6),
                 mtime: buf.readUInt32LE(10)
-            })
-        );
+            }));
+        } else {
+            // Fallback to old JSON format
+            permsCache = readJsonFallback(path.join(SERVER_DIR, 'permissions.json'));
+        }
         
-        // Load symlinks
-        symlinksCache = readBinaryMetadata(
-            path.join(SERVER_DIR, 'symlinks.bin'),
-            (buf) => buf.toString('utf8')
-        );
+        if (fs.existsSync(binSymlinks)) {
+            symlinksCache = readBinaryMetadata(binSymlinks, (buf) => buf.toString('utf8'));
+        } else {
+            symlinksCache = readJsonFallback(path.join(SERVER_DIR, 'symlinks.json'));
+        }
         
-        // Load devices
-        devicesCache = readBinaryMetadata(
-            path.join(SERVER_DIR, 'devices.bin'),
-            (buf) => ({
+        if (fs.existsSync(binDevices)) {
+            devicesCache = readBinaryMetadata(binDevices, (buf) => ({
                 type: buf.readUInt8(0) === 0 ? 'char' : 'block',
                 major: buf.readUInt16LE(1),
                 minor: buf.readUInt16LE(3)
-            })
-        );
+            }));
+        } else {
+            devicesCache = readJsonFallback(path.join(SERVER_DIR, 'devices.json'));
+        }
         
-        // Load types
-        typesCache = readBinaryMetadata(
-            path.join(SERVER_DIR, 'types.bin'),
-            (buf) => {
+        if (fs.existsSync(binTypes)) {
+            typesCache = readBinaryMetadata(binTypes, (buf) => {
                 const typeMap = {
                     [FT_FILE]: 'file',
                     [FT_DIR]: 'dir',
@@ -156,8 +171,10 @@ export function create9pHandler(rootPath, serverDir) {
                     [FT_SOCKET]: 'socket'
                 };
                 return typeMap[buf.readUInt8(0)] || 'file';
-            }
-        );
+            });
+        } else {
+            typesCache = readJsonFallback(path.join(SERVER_DIR, 'types.json'));
+        }
     }
 
     function savePerms() {
@@ -271,7 +288,17 @@ export function create9pHandler(rootPath, serverDir) {
 
     function getSymlinkTarget(fullPath) {
         const rel = getRelPath(fullPath);
-        return symlinksCache[rel] || null;
+        // Check cache first
+        if (symlinksCache[rel]) {
+            return symlinksCache[rel];
+        }
+        // Try reading actual symlink from filesystem
+        try {
+            const target = fs.readlinkSync(fullPath);
+            return target;
+        } catch(e) {
+            return null;
+        }
     }
 
     function setSymlink(fullPath, target) {
@@ -302,7 +329,17 @@ export function create9pHandler(rootPath, serverDir) {
     }
 
     function isSymlink(fullPath) {
-        return getFileType(fullPath) === 'symlink';
+        // Check cache first
+        if (getFileType(fullPath) === 'symlink') {
+            return true;
+        }
+        // Check actual filesystem
+        try {
+            const stats = fs.lstatSync(fullPath);
+            return stats.isSymbolicLink();
+        } catch(e) {
+            return false;
+        }
     }
 
     loadMetadata();
@@ -310,6 +347,7 @@ export function create9pHandler(rootPath, serverDir) {
     function statToQid(stats, fullPath) {
         let type = QTFILE;
         if (stats.isDirectory()) type = QTDIR;
+        else if (stats.isSymbolicLink()) type = QTSYMLINK;
         else if (isSymlink(fullPath)) type = QTSYMLINK;
         
         return {
@@ -323,14 +361,18 @@ export function create9pHandler(rootPath, serverDir) {
         const perm = getPerm(fullPath);
         let mode = perm ? perm.mode : (stats.mode & 0o777);
         
-        const fileType = getFileType(fullPath);
-        if (fileType === 'symlink') mode |= S_IFLNK;
-        else if (fileType === 'chardev') mode |= S_IFCHR;
-        else if (fileType === 'blockdev') mode |= S_IFBLK;
-        else if (fileType === 'fifo') mode |= S_IFIFO;
-        else if (fileType === 'socket') mode |= S_IFSOCK;
+        // Check actual stat first
+        if (stats.isSymbolicLink()) mode |= S_IFLNK;
         else if (stats.isDirectory()) mode |= S_IFDIR;
-        else mode |= S_IFREG;
+        else {
+            const fileType = getFileType(fullPath);
+            if (fileType === 'symlink') mode |= S_IFLNK;
+            else if (fileType === 'chardev') mode |= S_IFCHR;
+            else if (fileType === 'blockdev') mode |= S_IFBLK;
+            else if (fileType === 'fifo') mode |= S_IFIFO;
+            else if (fileType === 'socket') mode |= S_IFSOCK;
+            else mode |= S_IFREG;
+        }
         
         return mode;
     }
@@ -417,7 +459,7 @@ export function create9pHandler(rootPath, serverDir) {
                             walkSuccess = false;
                             break;
                         }
-                        const st = fs.statSync(nextPath);
+                        const st = fs.lstatSync(nextPath);
                         qids.push(statToQid(st, nextPath));
                         currentPath = nextPath;
                     }
@@ -444,7 +486,7 @@ export function create9pHandler(rootPath, serverDir) {
                         sendError(tag, "fid not found", ENOENT);
                         break;
                     }
-                    const gst = fs.statSync(gFidObj.path);
+                    const gst = fs.lstatSync(gFidObj.path);
                     const qid = statToQid(gst, gFidObj.path);
                     const mode = getMode(gst, gFidObj.path);
                     const { uid: gUid, gid: gGid } = getUidGid(gFidObj.path);
@@ -530,7 +572,7 @@ export function create9pHandler(rootPath, serverDir) {
                     }
 
                     try {
-                        const st = fs.statSync(oFidObj.path);
+                        const st = fs.lstatSync(oFidObj.path);
                         if (st.isDirectory()) {
                             oFidObj.dirEntries = fs.readdirSync(oFidObj.path);
                             oFidObj.dirIndex = 0;
@@ -579,7 +621,7 @@ export function create9pHandler(rootPath, serverDir) {
                         const childPath = path.join(dirFidObj.path, name);
                         let st;
                         try {
-                            st = fs.statSync(childPath);
+                            st = fs.lstatSync(childPath);
                         } catch(e) {
                             dirFidObj.dirIndex++;
                             continue;
