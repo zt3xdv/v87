@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/panel/server.js",
-    "vm": "node ./src/panel/vm_runner.js 128 /storage/emulated/0/v87/data/users_data/tsumugi_dev/servers/1764728135075/"
+    "vm": "node ./src/panel/vm_runner.js 128 /storage/emulated/0/v87/data/users_data/tsumugi_dev/servers/1764801407888/"
   },
   "keywords": [
     "panel",

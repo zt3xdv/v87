@@ -59,7 +59,7 @@ const INITRD_PATH = path.join(__dirname, '../../vm/initrd/linux.img');
 fs.ensureDirSync(USER_DATA_DIR);
 fs.ensureDirSync(UPLOADS_DIR);
 
-async function extractCpio(cpioData, destDir, perms, onProgress) {
+async function extractCpio(cpioData, destDir, metadata, onProgress) {
     let offset = 0;
     let totalSize = cpioData.length;
     let fileCount = 0;
@@ -70,10 +70,17 @@ async function extractCpio(cpioData, destDir, perms, onProgress) {
         const magic = cpioData.toString('ascii', offset, offset + 6);
         if (magic !== '070701' && magic !== '070702') break;
         
+        const ino = parseInt(cpioData.toString('ascii', offset + 6, offset + 14), 16);
+        const mode = parseInt(cpioData.toString('ascii', offset + 14, offset + 22), 16);
         const uid = parseInt(cpioData.toString('ascii', offset + 22, offset + 30), 16);
         const gid = parseInt(cpioData.toString('ascii', offset + 30, offset + 38), 16);
+        const nlink = parseInt(cpioData.toString('ascii', offset + 38, offset + 46), 16);
+        const mtime = parseInt(cpioData.toString('ascii', offset + 46, offset + 54), 16);
+        const devmajor = parseInt(cpioData.toString('ascii', offset + 62, offset + 70), 16);
+        const devminor = parseInt(cpioData.toString('ascii', offset + 70, offset + 78), 16);
+        const rdevmajor = parseInt(cpioData.toString('ascii', offset + 78, offset + 86), 16);
+        const rdevminor = parseInt(cpioData.toString('ascii', offset + 86, offset + 94), 16);
         const nameSize = parseInt(cpioData.toString('ascii', offset + 94, offset + 102), 16);
-        const mode = parseInt(cpioData.toString('ascii', offset + 14, offset + 22), 16);
         
         const headerSize = 110;
         const nameStart = offset + headerSize;
@@ -92,11 +99,55 @@ async function extractCpio(cpioData, destDir, perms, onProgress) {
         
         if (fileName && fileName !== '.' && fileName !== '..') {
             const fullPath = path.join(destDir, fileName);
-            const isDir = (mode & 0o170000) === 0o040000;
-            const isFile = (mode & 0o170000) === 0o100000;
-            const isSymlink = (mode & 0o170000) === 0o120000;
+            const fileType = mode & 0o170000;
+            const isDir = fileType === 0o040000;
+            const isFile = fileType === 0o100000;
+            const isSymlink = fileType === 0o120000;
+            const isCharDev = fileType === 0o020000;
+            const isBlockDev = fileType === 0o060000;
+            const isFifo = fileType === 0o010000;
+            const isSocket = fileType === 0o140000;
             
-            perms[fileName] = { mode: mode & 0o7777, uid, gid };
+            // Store permissions
+            metadata.perms[fileName] = { 
+                mode: mode & 0o7777, 
+                uid, 
+                gid,
+                mtime
+            };
+            
+            // Store symlink info
+            if (isSymlink && actualFileSize > 0) {
+                const linkTarget = cpioData.toString('utf8', dataStart, dataStart + actualFileSize);
+                metadata.symlinks[fileName] = linkTarget;
+            }
+            
+            // Store device nodes
+            if (isCharDev || isBlockDev) {
+                metadata.devices[fileName] = {
+                    type: isCharDev ? 'char' : 'block',
+                    major: rdevmajor,
+                    minor: rdevminor
+                };
+            }
+            
+            // Store special files
+            if (isFifo) {
+                metadata.special[fileName] = { type: 'fifo' };
+            }
+            if (isSocket) {
+                metadata.special[fileName] = { type: 'socket' };
+            }
+            
+            // Store file type for quick lookup
+            let type = 'file';
+            if (isDir) type = 'dir';
+            else if (isSymlink) type = 'symlink';
+            else if (isCharDev) type = 'chardev';
+            else if (isBlockDev) type = 'blockdev';
+            else if (isFifo) type = 'fifo';
+            else if (isSocket) type = 'socket';
+            metadata.types[fileName] = type;
             
             try {
                 if (isDir) {
@@ -112,6 +163,7 @@ async function extractCpio(cpioData, destDir, perms, onProgress) {
                     const fileData = cpioData.subarray(dataStart, dataStart + actualFileSize);
                     await fs.writeFile(fullPath, fileData);
                 }
+                // Skip device nodes, fifos, sockets - can't create on host
             } catch(e) {}
             
             fileCount++;
@@ -129,8 +181,9 @@ async function extractCpio(cpioData, destDir, perms, onProgress) {
 
 async function extractInitrd(serverDir, onProgress) {
     try {
+        const { writePerms, writeSymlinks, writeDevices, writeSpecial, writeTypes } = await import('./utils/fsMetadata.js');
+        
         const destDir = path.join(serverDir, 'root');
-        const permsFile = path.join(serverDir, 'permissions.json');
         
         if (onProgress) onProgress(5, 'Reading initrd...');
         const compressed = await fs.readFile(INITRD_PATH);
@@ -139,13 +192,25 @@ async function extractInitrd(serverDir, onProgress) {
         const decompressed = zlib.gunzipSync(compressed);
         
         if (onProgress) onProgress(25, 'Extracting files...');
-        const perms = {};
-        await extractCpio(decompressed, destDir, perms, (pct, file) => {
+        const metadata = {
+            perms: {},
+            symlinks: {},
+            devices: {},
+            special: {},
+            types: {}
+        };
+        await extractCpio(decompressed, destDir, metadata, (pct, file) => {
             if (onProgress) onProgress(25 + Math.round(pct * 0.70), file);
         });
         
-        if (onProgress) onProgress(98, 'Saving permissions...');
-        await fs.writeFile(permsFile, JSON.stringify(perms));
+        if (onProgress) onProgress(95, 'Saving metadata...');
+        await Promise.all([
+            writePerms(path.join(serverDir, 'permissions.bin'), metadata.perms),
+            writeSymlinks(path.join(serverDir, 'symlinks.bin'), metadata.symlinks),
+            writeDevices(path.join(serverDir, 'devices.bin'), metadata.devices),
+            writeSpecial(path.join(serverDir, 'special.bin'), metadata.special),
+            writeTypes(path.join(serverDir, 'types.bin'), metadata.types)
+        ]);
         
         if (onProgress) onProgress(100, 'Complete');
         return true;

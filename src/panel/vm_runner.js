@@ -41,8 +41,8 @@ export class VMInstance {
         const initrdPath = path.join(workspaceRoot, "vm/boot.img");
         
         const rootPath = path.join(this.cwd, "root");
-        const permsPath = path.join(this.cwd, "permissions.json");
-        const handle9p = create9pHandler(rootPath, permsPath);
+        const serverDir = this.cwd;
+        const handle9p = create9pHandler(rootPath, serverDir);
         
         const origCwd = process.cwd();
         try {

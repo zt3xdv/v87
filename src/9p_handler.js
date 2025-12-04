@@ -14,35 +14,200 @@ const EINVAL = 22;
 // QID Types
 const QTDIR = 0x80;
 const QTFILE = 0x00;
+const QTSYMLINK = 0x02;
 
 // File Types for mode
-const S_IFDIR = 0x4000;
-const S_IFREG = 0x8000;
-const S_IFLNK = 0xA000;
+const S_IFDIR = 0o040000;
+const S_IFREG = 0o100000;
+const S_IFLNK = 0o120000;
+const S_IFCHR = 0o020000;
+const S_IFBLK = 0o060000;
+const S_IFIFO = 0o010000;
+const S_IFSOCK = 0o140000;
 
-export function create9pHandler(rootPath, permsPath) {
-    const ROOT = rootPath;
-    const PERMS_FILE = permsPath;
-    const fids = new Map();
-    let permsCache = {};
-    let permsDirty = false;
+// Binary metadata format constants
+const MAGIC = Buffer.from('V87M');
+const VERSION = 1;
+const FT_FILE = 0;
+const FT_DIR = 1;
+const FT_SYMLINK = 2;
+const FT_CHARDEV = 3;
+const FT_BLOCKDEV = 4;
+const FT_FIFO = 5;
+const FT_SOCKET = 6;
 
-    function loadPerms() {
-        try {
-            if (fs.existsSync(PERMS_FILE)) {
-                permsCache = JSON.parse(fs.readFileSync(PERMS_FILE, 'utf8'));
-            }
-        } catch(e) {
-            permsCache = {};
+function readBinaryMetadata(filePath, decodeEntry) {
+    const result = {};
+    
+    if (!fs.existsSync(filePath)) {
+        return result;
+    }
+    
+    try {
+        const buf = fs.readFileSync(filePath);
+        
+        if (buf.length < 8) return result;
+        if (!buf.subarray(0, 4).equals(MAGIC)) return result;
+        
+        const version = buf.readUInt16LE(4);
+        if (version !== VERSION) return result;
+        
+        const count = buf.readUInt16LE(6);
+        let offset = 8;
+        
+        for (let i = 0; i < count && offset < buf.length; i++) {
+            if (offset + 2 > buf.length) break;
+            const pathLen = buf.readUInt16LE(offset);
+            offset += 2;
+            
+            if (offset + pathLen > buf.length) break;
+            const pathStr = buf.subarray(offset, offset + pathLen).toString('utf8');
+            offset += pathLen;
+            
+            if (offset + 2 > buf.length) break;
+            const dataLen = buf.readUInt16LE(offset);
+            offset += 2;
+            
+            if (offset + dataLen > buf.length) break;
+            const dataBuf = buf.subarray(offset, offset + dataLen);
+            offset += dataLen;
+            
+            result[pathStr] = decodeEntry(dataBuf);
         }
+    } catch(e) {}
+    
+    return result;
+}
+
+function writeBinaryMetadata(filePath, entries, encodeEntry) {
+    const chunks = [MAGIC, Buffer.alloc(4)];
+    const keys = Object.keys(entries);
+    chunks[1].writeUInt16LE(VERSION, 0);
+    chunks[1].writeUInt16LE(keys.length, 2);
+    
+    for (const key of keys) {
+        const value = entries[key];
+        const pathBuf = Buffer.from(key, 'utf8');
+        const dataBuf = encodeEntry(value);
+        
+        const pathLenBuf = Buffer.alloc(2);
+        pathLenBuf.writeUInt16LE(pathBuf.length, 0);
+        
+        const dataLenBuf = Buffer.alloc(2);
+        dataLenBuf.writeUInt16LE(dataBuf.length, 0);
+        
+        chunks.push(pathLenBuf, pathBuf, dataLenBuf, dataBuf);
+    }
+    
+    fs.writeFileSync(filePath, Buffer.concat(chunks));
+}
+
+export function create9pHandler(rootPath, serverDir) {
+    const ROOT = rootPath;
+    const SERVER_DIR = serverDir;
+    const fids = new Map();
+    
+    // Metadata caches
+    let permsCache = {};
+    let symlinksCache = {};
+    let devicesCache = {};
+    let typesCache = {};
+    let dirty = { perms: false, symlinks: false, types: false };
+
+    function loadMetadata() {
+        // Load permissions
+        permsCache = readBinaryMetadata(
+            path.join(SERVER_DIR, 'permissions.bin'),
+            (buf) => ({
+                mode: buf.readUInt16LE(0),
+                uid: buf.readUInt32LE(2),
+                gid: buf.readUInt32LE(6),
+                mtime: buf.readUInt32LE(10)
+            })
+        );
+        
+        // Load symlinks
+        symlinksCache = readBinaryMetadata(
+            path.join(SERVER_DIR, 'symlinks.bin'),
+            (buf) => buf.toString('utf8')
+        );
+        
+        // Load devices
+        devicesCache = readBinaryMetadata(
+            path.join(SERVER_DIR, 'devices.bin'),
+            (buf) => ({
+                type: buf.readUInt8(0) === 0 ? 'char' : 'block',
+                major: buf.readUInt16LE(1),
+                minor: buf.readUInt16LE(3)
+            })
+        );
+        
+        // Load types
+        typesCache = readBinaryMetadata(
+            path.join(SERVER_DIR, 'types.bin'),
+            (buf) => {
+                const typeMap = {
+                    [FT_FILE]: 'file',
+                    [FT_DIR]: 'dir',
+                    [FT_SYMLINK]: 'symlink',
+                    [FT_CHARDEV]: 'chardev',
+                    [FT_BLOCKDEV]: 'blockdev',
+                    [FT_FIFO]: 'fifo',
+                    [FT_SOCKET]: 'socket'
+                };
+                return typeMap[buf.readUInt8(0)] || 'file';
+            }
+        );
     }
 
     function savePerms() {
-        if (!permsDirty) return;
-        try {
-            fs.writeFileSync(PERMS_FILE, JSON.stringify(permsCache));
-            permsDirty = false;
-        } catch(e) {}
+        if (!dirty.perms) return;
+        writeBinaryMetadata(
+            path.join(SERVER_DIR, 'permissions.bin'),
+            permsCache,
+            (v) => {
+                const buf = Buffer.alloc(14);
+                buf.writeUInt16LE(v.mode || 0, 0);
+                buf.writeUInt32LE(v.uid || 0, 2);
+                buf.writeUInt32LE(v.gid || 0, 6);
+                buf.writeUInt32LE(v.mtime || 0, 10);
+                return buf;
+            }
+        );
+        dirty.perms = false;
+    }
+
+    function saveSymlinks() {
+        if (!dirty.symlinks) return;
+        writeBinaryMetadata(
+            path.join(SERVER_DIR, 'symlinks.bin'),
+            symlinksCache,
+            (target) => Buffer.from(target, 'utf8')
+        );
+        dirty.symlinks = false;
+    }
+
+    function saveTypes() {
+        if (!dirty.types) return;
+        const typeMap = {
+            'file': FT_FILE,
+            'dir': FT_DIR,
+            'symlink': FT_SYMLINK,
+            'chardev': FT_CHARDEV,
+            'blockdev': FT_BLOCKDEV,
+            'fifo': FT_FIFO,
+            'socket': FT_SOCKET
+        };
+        writeBinaryMetadata(
+            path.join(SERVER_DIR, 'types.bin'),
+            typesCache,
+            (v) => {
+                const buf = Buffer.alloc(1);
+                buf.writeUInt8(typeMap[v] || FT_FILE, 0);
+                return buf;
+            }
+        );
+        dirty.types = false;
     }
 
     function getRelPath(fullPath) {
@@ -51,44 +216,104 @@ export function create9pHandler(rootPath, permsPath) {
 
     function getPerm(fullPath) {
         const rel = getRelPath(fullPath);
-        if (permsCache[rel]) {
-            return permsCache[rel];
-        }
-        return null;
+        return permsCache[rel] || null;
     }
 
     function setPerm(fullPath, mode, uid = 0, gid = 0) {
         const rel = getRelPath(fullPath);
-        permsCache[rel] = { mode: mode & 0o7777, uid, gid };
-        permsDirty = true;
+        permsCache[rel] = { mode: mode & 0o7777, uid, gid, mtime: Math.floor(Date.now() / 1000) };
+        dirty.perms = true;
         savePerms();
     }
 
-    function deletePerm(fullPath) {
+    function deleteMeta(fullPath) {
         const rel = getRelPath(fullPath);
         if (permsCache[rel]) {
             delete permsCache[rel];
-            permsDirty = true;
+            dirty.perms = true;
             savePerms();
+        }
+        if (symlinksCache[rel]) {
+            delete symlinksCache[rel];
+            dirty.symlinks = true;
+            saveSymlinks();
+        }
+        if (typesCache[rel]) {
+            delete typesCache[rel];
+            dirty.types = true;
+            saveTypes();
         }
     }
 
-    function renamePerm(oldPath, newPath) {
+    function renameMeta(oldPath, newPath) {
         const oldRel = getRelPath(oldPath);
         const newRel = getRelPath(newPath);
+        
         if (permsCache[oldRel]) {
             permsCache[newRel] = permsCache[oldRel];
             delete permsCache[oldRel];
-            permsDirty = true;
+            dirty.perms = true;
             savePerms();
+        }
+        if (symlinksCache[oldRel]) {
+            symlinksCache[newRel] = symlinksCache[oldRel];
+            delete symlinksCache[oldRel];
+            dirty.symlinks = true;
+            saveSymlinks();
+        }
+        if (typesCache[oldRel]) {
+            typesCache[newRel] = typesCache[oldRel];
+            delete typesCache[oldRel];
+            dirty.types = true;
+            saveTypes();
         }
     }
 
-    loadPerms();
+    function getSymlinkTarget(fullPath) {
+        const rel = getRelPath(fullPath);
+        return symlinksCache[rel] || null;
+    }
 
-    function statToQid(stats) {
+    function setSymlink(fullPath, target) {
+        const rel = getRelPath(fullPath);
+        symlinksCache[rel] = target;
+        typesCache[rel] = 'symlink';
+        dirty.symlinks = true;
+        dirty.types = true;
+        saveSymlinks();
+        saveTypes();
+    }
+
+    function getFileType(fullPath) {
+        const rel = getRelPath(fullPath);
+        return typesCache[rel] || null;
+    }
+
+    function setFileType(fullPath, type) {
+        const rel = getRelPath(fullPath);
+        typesCache[rel] = type;
+        dirty.types = true;
+        saveTypes();
+    }
+
+    function getDevice(fullPath) {
+        const rel = getRelPath(fullPath);
+        return devicesCache[rel] || null;
+    }
+
+    function isSymlink(fullPath) {
+        return getFileType(fullPath) === 'symlink';
+    }
+
+    loadMetadata();
+
+    function statToQid(stats, fullPath) {
+        let type = QTFILE;
+        if (stats.isDirectory()) type = QTDIR;
+        else if (isSymlink(fullPath)) type = QTSYMLINK;
+        
         return {
-            type: stats.isDirectory() ? QTDIR : QTFILE,
+            type,
             version: Math.floor(stats.mtimeMs) & 0xFFFFFFFF,
             path: Number(stats.ino)
         };
@@ -97,9 +322,16 @@ export function create9pHandler(rootPath, permsPath) {
     function getMode(stats, fullPath) {
         const perm = getPerm(fullPath);
         let mode = perm ? perm.mode : (stats.mode & 0o777);
-        if (stats.isDirectory()) mode |= S_IFDIR;
-        else if (stats.isSymbolicLink()) mode |= S_IFLNK;
+        
+        const fileType = getFileType(fullPath);
+        if (fileType === 'symlink') mode |= S_IFLNK;
+        else if (fileType === 'chardev') mode |= S_IFCHR;
+        else if (fileType === 'blockdev') mode |= S_IFBLK;
+        else if (fileType === 'fifo') mode |= S_IFIFO;
+        else if (fileType === 'socket') mode |= S_IFSOCK;
+        else if (stats.isDirectory()) mode |= S_IFDIR;
         else mode |= S_IFREG;
+        
         return mode;
     }
 
@@ -139,8 +371,6 @@ export function create9pHandler(rootPath, permsPath) {
                     break;
 
                 case 104: // Tattach
-                    // 9P2000.L: fid[4] afid[4] uname[s] aname[s] n_uname[4]
-                    // Note: some clients don't send n_uname, parse it only if data remains
                     const [fid, afid, uname, aname] = Unmarshall(["w", "w", "s", "s"], reqBuf, state);
                     let n_uname = 0;
                     if (state.offset < size) {
@@ -151,7 +381,7 @@ export function create9pHandler(rootPath, permsPath) {
                     }
                     const stats = fs.statSync(ROOT);
                     fids.set(fid, { path: ROOT, type: QTDIR, uid: n_uname });
-                    sendReply(105, tag, ["Q"], [statToQid(stats)]);
+                    sendReply(105, tag, ["Q"], [statToQid(stats, ROOT)]);
                     break;
 
                 case 108: // Tflush
@@ -174,14 +404,11 @@ export function create9pHandler(rootPath, permsPath) {
                     let walkSuccess = true;
 
                     for (const name of wnames) {
-                        // Resolve to get canonical path (handles .. correctly)
                         const nextPath = path.resolve(currentPath, name);
                         
-                        // Check confinement: must be inside ROOT or be ROOT itself
                         if (nextPath !== rootResolved && !nextPath.startsWith(rootResolved + path.sep)) {
-                            // Trying to escape ROOT - treat ".." at root as staying at root
                             if (name === ".." && currentPath === rootResolved) {
-                                continue; // Stay at root, don't add qid
+                                continue;
                             }
                             walkSuccess = false;
                             break;
@@ -191,7 +418,7 @@ export function create9pHandler(rootPath, permsPath) {
                             break;
                         }
                         const st = fs.statSync(nextPath);
-                        qids.push(statToQid(st));
+                        qids.push(statToQid(st, nextPath));
                         currentPath = nextPath;
                     }
 
@@ -218,7 +445,7 @@ export function create9pHandler(rootPath, permsPath) {
                         break;
                     }
                     const gst = fs.statSync(gFidObj.path);
-                    const qid = statToQid(gst);
+                    const qid = statToQid(gst, gFidObj.path);
                     const mode = getMode(gst, gFidObj.path);
                     const { uid: gUid, gid: gGid } = getUidGid(gFidObj.path);
                     
@@ -272,6 +499,27 @@ export function create9pHandler(rootPath, permsPath) {
                     }
                     break;
 
+                case 22: // Treadlink
+                    const [rlfid] = Unmarshall(["w"], reqBuf, state);
+                    const rlFidObj = fids.get(rlfid);
+                    if (!rlFidObj) {
+                        sendError(tag, "fid not found", ENOENT);
+                        break;
+                    }
+                    
+                    const linkTarget = getSymlinkTarget(rlFidObj.path);
+                    if (linkTarget) {
+                        sendReply(23, tag, ["s"], [linkTarget]);
+                    } else {
+                        try {
+                            const target = fs.readlinkSync(rlFidObj.path);
+                            sendReply(23, tag, ["s"], [target]);
+                        } catch(e) {
+                            sendError(tag, "Not a symlink", EINVAL);
+                        }
+                    }
+                    break;
+
                 case 112: // Topen (9P2000)
                 case 12: // Tlopen (9P2000.L)
                     const [ofid, oflags] = Unmarshall(["w", "w"], reqBuf, state);
@@ -286,17 +534,20 @@ export function create9pHandler(rootPath, permsPath) {
                         if (st.isDirectory()) {
                             oFidObj.dirEntries = fs.readdirSync(oFidObj.path);
                             oFidObj.dirIndex = 0;
+                        } else if (isSymlink(oFidObj.path)) {
+                            const qid2 = statToQid(st, oFidObj.path);
+                            sendReply(13, tag, ["Q", "w"], [qid2, 8192]);
+                            break;
                         } else {
-                            // Convert Linux flags to Node.js
                             const O_TRUNC = 0x200, O_APPEND = 0x400;
-                            let nodeFlags = oflags & 3; // O_RDONLY=0, O_WRONLY=1, O_RDWR=2
+                            let nodeFlags = oflags & 3;
                             if (oflags & O_TRUNC) nodeFlags |= fs.constants.O_TRUNC;
                             if (oflags & O_APPEND) nodeFlags |= fs.constants.O_APPEND;
                             const fd = fs.openSync(oFidObj.path, nodeFlags);
                             oFidObj.fd = fd;
                         }
-                        const qid2 = statToQid(st);
-                        sendReply(13, tag, ["Q", "w"], [qid2, 8192]); // Rlopen
+                        const qid2 = statToQid(st, oFidObj.path);
+                        sendReply(13, tag, ["Q", "w"], [qid2, 8192]);
                     } catch (e) {
                         sendError(tag, e.message, EIO);
                     }
@@ -334,8 +585,10 @@ export function create9pHandler(rootPath, permsPath) {
                             continue;
                         }
                         
-                        const qid = statToQid(st);
-                        const type = (qid.type === QTDIR) ? 4 : 8;
+                        const qid = statToQid(st, childPath);
+                        let type = 8;
+                        if (qid.type === QTDIR) type = 4;
+                        else if (isSymlink(childPath)) type = 10;
                         
                         const nameLen = Buffer.byteLength(name);
                         const entrySize = 13 + 8 + 1 + 2 + nameLen;
@@ -363,6 +616,16 @@ export function create9pHandler(rootPath, permsPath) {
                     const rFidObj = fids.get(rfid);
                     if (!rFidObj) {
                         sendError(tag, "fid not found", ENOENT);
+                        break;
+                    }
+
+                    if (isSymlink(rFidObj.path)) {
+                        const target = getSymlinkTarget(rFidObj.path) || '';
+                        const targetBuf = Buffer.from(target, 'utf8');
+                        const start = Number(roffset);
+                        const end = Math.min(start + rcount, targetBuf.length);
+                        const slice = targetBuf.subarray(start, end);
+                        sendReply(117, tag, ["w", "B"], [slice.length, slice]);
                         break;
                     }
 
@@ -402,7 +665,6 @@ export function create9pHandler(rootPath, permsPath) {
                     break;
                 
                 case 14: // Tlcreate
-                    // 9P2000.L: fid[4] name[s] flags[4] mode[4] gid[4]
                     const [crfid, crname, crflags, crmode, crgid] = Unmarshall(["w", "s", "w", "w", "w"], reqBuf, state);
                     const crFidObj = fids.get(crfid);
                     if (!crFidObj) {
@@ -411,10 +673,8 @@ export function create9pHandler(rootPath, permsPath) {
                     }
                     const newPath = path.join(crFidObj.path, crname);
                     try {
-                        // Convert Linux open flags to Node.js flags
                         let nodeFlags = 'w+';
                         const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2;
-                        const O_TRUNC = 0x200, O_APPEND = 0x400;
                         const accessMode = crflags & 3;
                         if (accessMode === O_RDONLY) nodeFlags = 'r+';
                         else if (accessMode === O_WRONLY) nodeFlags = 'w';
@@ -422,10 +682,32 @@ export function create9pHandler(rootPath, permsPath) {
                         
                         const fd = fs.openSync(newPath, nodeFlags, crmode & 0o777);
                         setPerm(newPath, crmode & 0o7777, 0, crgid);
+                        setFileType(newPath, 'file');
                         fids.set(crfid, { path: newPath, fd: fd, type: QTFILE });
                         const st = fs.statSync(newPath);
-                        const qid = statToQid(st);
+                        const qid = statToQid(st, newPath);
                         sendReply(15, tag, ["Q", "w"], [qid, 8192]);
+                    } catch(e) {
+                        sendError(tag, e.message, EIO);
+                    }
+                    break;
+
+                case 16: // Tsymlink
+                    const [slfid, slname, sltarget, slgid] = Unmarshall(["w", "s", "s", "w"], reqBuf, state);
+                    const slFidObj = fids.get(slfid);
+                    if (!slFidObj) {
+                        sendError(tag, "fid not found", ENOENT);
+                        break;
+                    }
+                    const symlinkPath = path.join(slFidObj.path, slname);
+                    try {
+                        fs.writeFileSync(symlinkPath, '');
+                        setSymlink(symlinkPath, sltarget);
+                        setPerm(symlinkPath, 0o777, 0, slgid);
+                        
+                        const st = fs.statSync(symlinkPath);
+                        const qid = { type: QTSYMLINK, version: 0, path: Number(st.ino) };
+                        sendReply(17, tag, ["Q"], [qid]);
                     } catch(e) {
                         sendError(tag, e.message, EIO);
                     }
@@ -441,9 +723,74 @@ export function create9pHandler(rootPath, permsPath) {
                     const newDirPath = path.join(mkFidObj.path, mkname);
                     try {
                         fs.mkdirSync(newDirPath);
+                        setPerm(newDirPath, mkmode & 0o7777, 0, mkgid);
+                        setFileType(newDirPath, 'dir');
                         const st = fs.statSync(newDirPath);
-                        const qid = statToQid(st);
+                        const qid = statToQid(st, newDirPath);
                         sendReply(73, tag, ["Q"], [qid]);
+                    } catch(e) {
+                        sendError(tag, e.message, EIO);
+                    }
+                    break;
+
+                case 30: // Tremove
+                    const [rmfid] = Unmarshall(["w"], reqBuf, state);
+                    const rmFidObj = fids.get(rmfid);
+                    if (!rmFidObj) {
+                        sendError(tag, "fid not found", ENOENT);
+                        break;
+                    }
+                    try {
+                        const st = fs.statSync(rmFidObj.path);
+                        if (st.isDirectory()) {
+                            fs.rmdirSync(rmFidObj.path);
+                        } else {
+                            fs.unlinkSync(rmFidObj.path);
+                        }
+                        deleteMeta(rmFidObj.path);
+                        fids.delete(rmfid);
+                        sendReply(31, tag);
+                    } catch(e) {
+                        sendError(tag, e.message, EIO);
+                    }
+                    break;
+
+                case 74: // Trenameat
+                    const [rnoldfid, rnoldname, rnnewfid, rnnewname] = Unmarshall(["w", "s", "w", "s"], reqBuf, state);
+                    const rnOldFidObj = fids.get(rnoldfid);
+                    const rnNewFidObj = fids.get(rnnewfid);
+                    if (!rnOldFidObj || !rnNewFidObj) {
+                        sendError(tag, "fid not found", ENOENT);
+                        break;
+                    }
+                    try {
+                        const oldPath = path.join(rnOldFidObj.path, rnoldname);
+                        const newPath = path.join(rnNewFidObj.path, rnnewname);
+                        fs.renameSync(oldPath, newPath);
+                        renameMeta(oldPath, newPath);
+                        sendReply(75, tag);
+                    } catch(e) {
+                        sendError(tag, e.message, EIO);
+                    }
+                    break;
+
+                case 76: // Tunlinkat
+                    const [uafid, uaname, uaflags] = Unmarshall(["w", "s", "w"], reqBuf, state);
+                    const uaFidObj = fids.get(uafid);
+                    if (!uaFidObj) {
+                        sendError(tag, "fid not found", ENOENT);
+                        break;
+                    }
+                    try {
+                        const targetPath = path.join(uaFidObj.path, uaname);
+                        const st = fs.statSync(targetPath);
+                        if (st.isDirectory()) {
+                            fs.rmdirSync(targetPath);
+                        } else {
+                            fs.unlinkSync(targetPath);
+                        }
+                        deleteMeta(targetPath);
+                        sendReply(77, tag);
                     } catch(e) {
                         sendError(tag, e.message, EIO);
                     }
