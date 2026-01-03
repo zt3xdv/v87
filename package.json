@@ -1,0 +1,30 @@
+{
+  "name": "v87",
+  "version": "3.0.0",
+  "type": "module",
+  "main": "src/panel/server.js",
+  "scripts": {
+    "start": "node src/panel/server.js",
+    "dev": "node --watch src/panel/server.js"
+  },
+  "keywords": [
+    "panel",
+    "vps",
+    "qemu",
+    "virt-builder",
+    "virtual-machines",
+    "v87"
+  ],
+  "author": "zt3xdv",
+  "license": "MIT",
+  "description": "V87 - Virtual machine hosting panel with QEMU + virt-builder",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "express": "^5.1.0",
+    "fs-extra": "^11.3.2",
+    "socket.io": "^4.8.1"
+  }
+}

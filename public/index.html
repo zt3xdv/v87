@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#09090b">
+    <title>v87 Panel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/xterm.css" />
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/material/index.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container-fluid d-flex justify-between align-center">
+            <a href="/" class="navbar-brand" onclick="event.preventDefault(); App.navigate('/dashboard')">v87</a>
+            
+            <div class="dropdown" style="position: relative;">
+                <button class="btn btn-sm btn-secondary" id="nav-toggle">
+                    <span class="material-symbols-outlined icon-sm">account_circle</span>
+                    <span id="nav-user"></span> 
+                    <span class="material-symbols-outlined icon-sm">expand_more</span>
+                </button>
+                <div class="dropdown-menu hidden" id="nav-menu"></div>
+            </div>
+        </div>
+    </nav>
+
+    <div id="app" class="container">
+        <div id="loading">Loading...</div>
+    </div>
+
+    <!-- LOGIN -->
+    <template id="login-template">
+        <div class="auth-container">
+            <div class="card">
+                <div class="card-header">
+                    <span class="material-symbols-outlined" style="font-size: 1.5rem; margin-right: 8px;">login</span>
+                    Sign In
+                </div>
+                <div class="card-body">
+                    <div id="login-error" class="alert alert-danger hidden"></div>
+                    <form id="login-form">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="l-username" class="form-control" placeholder="Enter your username" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="password" id="l-password" class="form-control" placeholder="Enter your password" required>
+                        </div>
+                        <button type="submit" class="btn btn-accent w-100">
+                            <span class="material-symbols-outlined icon-sm">arrow_forward</span>
+                            Sign In
+                        </button>
+                        <div class="mt-4 text-center text-sm text-muted">
+                            Don't have an account? <a href="/register" onclick="event.preventDefault(); App.navigate('/register')">Register here</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- REGISTER -->
+    <template id="register-template">
+        <div class="auth-container">
+            <div class="card">
+                <div class="card-header">
+                    <span class="material-symbols-outlined" style="font-size: 1.5rem; margin-right: 8px;">person_add</span>
+                    Create Account
+                </div>
+                <div class="card-body">
+                    <div id="reg-error" class="alert alert-danger hidden"></div>
+                    <form id="register-form">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="r-username" class="form-control" placeholder="Choose a username" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="password" id="r-password" class="form-control" placeholder="Minimum 6 characters" required>
+                        </div>
+                        <button type="submit" class="btn btn-success w-100">
+                            <span class="material-symbols-outlined icon-sm">check</span>
+                            Create Account
+                        </button>
+                        <div class="mt-4 text-center text-sm text-muted">
+                            Already have an account? <a href="/login" onclick="event.preventDefault(); App.navigate('/login')">Sign in</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- DASHBOARD -->
+    <template id="dashboard-template">
+        <div class="mb-5">
+            <h2 class="mb-1">Welcome to v87</h2>
+            <p class="text-secondary text-sm mb-0">Manage your virtual machines from one place.</p>
+        </div>
+        
+        <div class="d-flex justify-between align-center mb-4">
+            <h3 class="mb-0">
+                <span class="material-symbols-outlined icon-md" style="margin-right: 8px; vertical-align: -4px;">computer</span>
+                Your VMs
+            </h3>
+            <a href="/create" class="btn btn-sm btn-accent" onclick="event.preventDefault(); App.navigate('/create')">
+                <span class="material-symbols-outlined icon-sm">add</span>
+                New VM
+            </a>
+        </div>
+        
+        <div id="server-list" class="server-list">
+            <div class="text-center text-muted p-4">
+                <span class="material-symbols-outlined" style="font-size: 3rem; opacity: 0.3; display: block; margin-bottom: 1rem;">cloud_off</span>
+                <p class="mb-2">No virtual machines found</p>
+                <a href="/create" onclick="event.preventDefault(); App.navigate('/create')">Create your first VM</a>
+            </div>
+        </div>
+    </template>
+    
+    <!-- CREATE VM -->
+    <template id="create-template">
+        <div class="mb-5">
+            <h2 class="mb-1">
+                <span class="material-symbols-outlined icon-md" style="margin-right: 8px; vertical-align: -4px;">add_circle</span>
+                Create Virtual Machine
+            </h2>
+            <p class="text-secondary text-sm mb-0">Configure your new VM with QEMU.</p>
+        </div>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">analytics</span>
+                Account Usage
+            </div>
+            <div class="card-body">
+                <div class="stat-item">
+                    <span>RAM</span>
+                    <span><span id="d-ram">0</span> / <span id="d-max-ram">2048</span> MB</span>
+                </div>
+                <div class="stat-item">
+                    <span>Slots</span>
+                    <span><span id="d-slots">0</span> / <span id="d-max-slots">3</span></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">settings</span>
+                VM Configuration
+            </div>
+            <div class="card-body">
+                <div id="create-error" class="alert alert-danger hidden"></div>
+                <form id="create-server-form">
+                    <div class="form-group">
+                        <label>VM Name</label>
+                        <input type="text" id="c-name" class="form-control" placeholder="My VM" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Linux Distribution</label>
+                        <select id="c-image" class="form-control" required>
+                            <option value="">Loading images...</option>
+                        </select>
+                        <small class="text-muted">Image will be downloaded via virt-builder</small>
+                    </div>
+                    <div class="d-flex gap-3">
+                        <div class="form-group" style="flex: 1;">
+                            <label>RAM (MB)</label>
+                            <input type="number" id="c-ram" class="form-control" value="1024" min="512" max="8192">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Disk Size</label>
+                            <select id="c-disk" class="form-control">
+                                <option value="5G">5 GB</option>
+                                <option value="10G" selected>10 GB</option>
+                                <option value="20G">20 GB</option>
+                                <option value="50G">50 GB</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Description (optional)</label>
+                        <input type="text" id="c-desc" class="form-control" placeholder="A brief description">
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">
+                        <span class="material-symbols-outlined icon-sm">rocket_launch</span>
+                        Create VM
+                    </button>
+                </form>
+            </div>
+        </div>
+    </template>
+
+    <!-- VM CREATING -->
+    <template id="server-creating-template">
+        <div class="auth-container">
+            <div class="card" style="max-width: 450px; width: 100%;">
+                <div class="card-header">
+                    <span class="material-symbols-outlined" style="font-size: 1.5rem; margin-right: 8px;">cloud_sync</span>
+                    Creating VM
+                </div>
+                <div class="card-body text-center">
+                    <div class="mb-4">
+                        <h4 id="creating-name" class="mb-2"></h4>
+                        <p id="creating-status" class="text-muted text-sm mb-0">Downloading image with virt-builder...</p>
+                    </div>
+                    <div class="progress-bar mb-3">
+                        <div class="progress-fill" id="creating-progress" style="width: 0%"></div>
+                    </div>
+                    <div class="text-muted text-sm">
+                        <span id="creating-percent">0</span>% complete
+                    </div>
+                    <p class="text-muted text-sm mt-3">This may take a few minutes for the first download.</p>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- VM LAYOUT -->
+    <template id="server-layout-template">
+        <div class="d-flex justify-between align-center mb-4 flex-wrap gap-3">
+            <div>
+                <h2 id="s-name" class="mb-0"></h2>
+                <div class="text-muted text-sm">
+                    <span id="s-id"></span> • <span id="s-image"></span>
+                </div>
+                <div id="s-credentials" class="text-sm mt-2 hidden" style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 6px; font-family: monospace;"></div>
+            </div>
+            <div class="d-flex gap-2 align-center">
+                <span class="badge" id="s-status-badge">STOPPED</span>
+                <button id="btn-start" class="btn btn-success btn-sm">
+                    <span class="material-symbols-outlined icon-sm">play_arrow</span>
+                    Start
+                </button>
+                <button id="btn-stop" class="btn btn-danger btn-sm">
+                    <span class="material-symbols-outlined icon-sm">stop</span>
+                    Stop
+                </button>
+            </div>
+        </div>
+        <div id="server-content"></div>
+    </template>
+
+    <!-- VM CONSOLE -->
+    <template id="server-console-template">
+        <div class="card" style="border: none; background: transparent; box-shadow: none;">
+            <div id="terminal" style="height: 500px;"></div>
+        </div>
+    </template>
+
+    <!-- ADMIN LAYOUT -->
+    <template id="admin-layout-template">
+        <div class="mb-5">
+            <h2 class="mb-1">
+                <span class="material-symbols-outlined icon-md" style="margin-right: 8px; vertical-align: -4px;">admin_panel_settings</span>
+                Admin Panel
+            </h2>
+            <p class="text-secondary text-sm mb-0">Manage VMs, users, and system configuration.</p>
+        </div>
+        
+        <div class="server-tabs mb-4">
+            <button class="tab-btn" id="tab-servers">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">computer</span>
+                VMs
+            </button>
+            <button class="tab-btn" id="tab-users">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">group</span>
+                Users
+            </button>
+            <button class="tab-btn" id="tab-config">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">settings</span>
+                Config
+            </button>
+        </div>
+        
+        <div id="admin-content"></div>
+    </template>
+    
+    <!-- ADMIN SERVERS TAB -->
+    <template id="admin-servers-template">
+        <div class="card">
+            <div class="card-header d-flex justify-between align-center">
+                <span>All Virtual Machines</span>
+                <input type="text" id="admin-server-search" class="form-control" placeholder="Search..." style="max-width: 200px; padding: 0.4rem 0.75rem;">
+            </div>
+            <div class="card-body">
+                <div style="overflow-x: auto;">
+                    <table class="file-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Owner</th>
+                                <th>Image</th>
+                                <th>Status</th>
+                                <th style="text-align: right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-servers-list"></tbody>
+                    </table>
+                </div>
+                <div id="admin-servers-pagination" class="text-muted text-sm mt-3"></div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- ADMIN USERS TAB -->
+    <template id="admin-users-template">
+        <div class="card">
+            <div class="card-header">
+                <span>All Users</span>
+            </div>
+            <div class="card-body">
+                <div style="overflow-x: auto;">
+                    <table class="file-table">
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Role</th>
+                                <th>VMs</th>
+                                <th>Status</th>
+                                <th style="text-align: right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-users-list"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- ADMIN CONFIG TAB -->
+    <template id="admin-config-template">
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">tune</span>
+                Default Limits
+            </div>
+            <div class="card-body">
+                <div id="config-success" class="alert alert-success hidden">
+                    <span class="material-symbols-outlined icon-sm">check_circle</span>
+                    Configuration saved
+                </div>
+                <form id="config-form">
+                    <div class="d-flex gap-3 mb-4 flex-wrap">
+                        <div class="form-group" style="flex: 1; min-width: 150px;">
+                            <label>Max VMs per User</label>
+                            <input type="number" id="cfg-max-servers" class="form-control" required>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 150px;">
+                            <label>Max RAM per User (MB)</label>
+                            <input type="number" id="cfg-max-ram" class="form-control" required>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 150px;">
+                            <label>Max Disk per User (GB)</label>
+                            <input type="number" id="cfg-max-disk" class="form-control" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-accent">
+                        <span class="material-symbols-outlined icon-sm">save</span>
+                        Save Configuration
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">info</span>
+                System Info
+            </div>
+            <div class="card-body">
+                <div class="stat-item">
+                    <span>Panel Port</span>
+                    <span id="cfg-port">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Total Users</span>
+                    <span id="cfg-total-users">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Total VMs</span>
+                    <span id="cfg-total-servers">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Running VMs</span>
+                    <span id="cfg-running">-</span>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- USER EDIT MODAL -->
+    <template id="user-edit-template">
+        <div class="editor-overlay">
+            <div class="editor-container" style="max-width: 500px; height: auto; max-height: 90%;">
+                <div class="editor-header">
+                    <span class="d-flex align-center gap-2">
+                        <span class="material-symbols-outlined icon-sm">person</span>
+                        <span id="edit-user-title" class="font-bold">Edit User</span>
+                    </span>
+                    <button id="btn-close-user-edit" class="btn btn-sm btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">close</span>
+                    </button>
+                </div>
+                <div class="editor-content" style="padding: 1.25rem; flex-direction: column; overflow-y: auto;">
+                    <div id="user-edit-error" class="alert alert-danger hidden"></div>
+                    <div id="user-edit-success" class="alert alert-success hidden">Saved</div>
+                    
+                    <form id="user-edit-form">
+                        <div class="form-group">
+                            <label>Role</label>
+                            <select id="edit-role" class="form-control">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="d-flex align-center gap-2">
+                                <input type="checkbox" id="edit-suspended" style="width: auto;">
+                                Suspended
+                            </label>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Suspend Reason</label>
+                            <input type="text" id="edit-suspend-reason" class="form-control" placeholder="Reason for suspension">
+                        </div>
+                        
+                        <hr style="border-color: var(--border-color); margin: 1rem 0;">
+                        
+                        <div class="mb-3">
+                            <label class="font-bold">Custom Limits (leave empty for default)</label>
+                        </div>
+                        
+                        <div class="d-flex gap-3 flex-wrap">
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>Max VMs</label>
+                                <input type="number" id="edit-limit-servers" class="form-control" placeholder="Default">
+                            </div>
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>Max RAM (MB)</label>
+                                <input type="number" id="edit-limit-ram" class="form-control" placeholder="Default">
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex gap-2 mt-4">
+                            <button type="submit" class="btn btn-accent flex-1">
+                                <span class="material-symbols-outlined icon-sm">save</span>
+                                Save Changes
+                            </button>
+                            <button type="button" id="btn-delete-user" class="btn btn-danger">
+                                <span class="material-symbols-outlined icon-sm">delete</span>
+                            </button>
+                        </div>
+                    </form>
+                    
+                    <div class="mt-4">
+                        <label class="font-bold mb-2 d-block">User VMs</label>
+                        <div id="user-servers-list" class="text-sm text-muted">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- SERVER EDIT MODAL (Admin) -->
+    <template id="server-edit-template">
+        <div class="editor-overlay">
+            <div class="editor-container" style="max-width: 500px; height: auto; max-height: 90%;">
+                <div class="editor-header">
+                    <span class="d-flex align-center gap-2">
+                        <span class="material-symbols-outlined icon-sm">computer</span>
+                        <span id="edit-server-title" class="font-bold">Edit VM</span>
+                    </span>
+                    <button id="btn-close-server-edit" class="btn btn-sm btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">close</span>
+                    </button>
+                </div>
+                <div class="editor-content" style="padding: 1.25rem; flex-direction: column; overflow-y: auto;">
+                    <div id="server-edit-error" class="alert alert-danger hidden"></div>
+                    <div id="server-edit-success" class="alert alert-success hidden">Saved</div>
+                    
+                    <form id="server-edit-form">
+                        <div class="form-group">
+                            <label>VM Name</label>
+                            <input type="text" id="edit-server-name" class="form-control" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" id="edit-server-desc" class="form-control">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="d-flex align-center gap-2">
+                                <input type="checkbox" id="edit-server-suspended" style="width: auto;">
+                                Suspended
+                            </label>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Suspend Reason</label>
+                            <input type="text" id="edit-server-suspend-reason" class="form-control" placeholder="Reason for suspension">
+                        </div>
+                        
+                        <div class="d-flex gap-2 mt-4">
+                            <button type="submit" class="btn btn-accent flex-1">
+                                <span class="material-symbols-outlined icon-sm">save</span>
+                                Save Changes
+                            </button>
+                            <button type="button" id="btn-force-stop" class="btn btn-secondary">
+                                <span class="material-symbols-outlined icon-sm">stop</span>
+                            </button>
+                            <button type="button" id="btn-delete-server-admin" class="btn btn-danger">
+                                <span class="material-symbols-outlined icon-sm">delete</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script src="/js/xterm.js"></script>
+    <script src="/js/xterm-addon-fit.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

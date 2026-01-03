@@ -1,0 +1,18 @@
+{
+  "port": 3000,
+  "secretKey": "v87-change-me-in-prod",
+  "limits": {
+    "maxServers": 3,
+    "maxRam": 4096,
+    "maxDisk": 100
+  },
+  "vm": {
+    "defaultImage": "debian-12",
+    "defaultRam": 1024,
+    "defaultDisk": "10G",
+    "cpuCores": 2,
+    "qemuPath": "qemu-system-x86_64",
+    "enableKvm": false,
+    "timeout": 0
+  }
+}
