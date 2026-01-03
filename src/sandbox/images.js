@@ -2,6 +2,14 @@
 // No requiere libguestfs/virt-builder
 
 export const VM_IMAGES = {
+    'debian-13': {
+        id: 'debian-13',
+        name: 'Debian 13 (Trixie)',
+        description: 'Debian 13 Generic Cloud',
+        url: 'https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2',
+        defaultUser: 'root',
+        defaultSize: '4G'
+    },
     'debian-12': {
         id: 'debian-12',
         name: 'Debian 12 (Bookworm)',
