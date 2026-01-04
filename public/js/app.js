@@ -97,6 +97,7 @@ const App = {
 
         createItem('Dashboard', '/dashboard', view === 'dashboard', 'dashboard');
         createItem('Create VM', '/create', view === 'create', 'note_add');
+        createItem('Account', '/account', view === 'account', 'account_circle');
         
         if (App.user.role === 'admin') {
              createItem('Admin', '/admin', view === 'admin', 'admin_panel_settings');
@@ -133,10 +134,12 @@ const App = {
         }
 
         const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|creating)$/);
-        const adminMatch = path.match(/^\/admin(?:\/(servers|users|config))?$/);
+        const adminMatch = path.match(/^\/admin(?:\/(servers|users|audit|maintenance|config))?$/);
+        const accountMatch = path.match(/^\/account(?:\/(apikeys|webhooks|prefs|activity))?$/);
 
         if (path === '/dashboard') App.renderNav('dashboard');
         else if (adminMatch) App.renderNav('admin');
+        else if (accountMatch) App.renderNav('account');
         else if (serverMatch) App.renderNav(serverMatch[2], serverMatch[1]);
         else App.renderNav('none');
 
@@ -147,6 +150,11 @@ const App = {
             if (App.user.role !== 'admin') return App.navigate('/dashboard');
             const tab = adminMatch[1] || 'servers';
             App.renderAdminPanel(appDiv, tab);
+        }
+        else if (accountMatch) {
+            if (!App.user) return App.navigate('/login');
+            const tab = accountMatch[1] || 'apikeys';
+            App.renderAccountPage(appDiv, tab);
         }
         else if (path === '/dashboard') {
             if (!App.user) return App.navigate('/login');
@@ -357,17 +365,21 @@ const App = {
             const cpuInput = document.getElementById('c-cpu');
             const ioInput = document.getElementById('c-io');
             
-            ramInput.min = data.stats.minRam || 512;
-            ramInput.max = data.stats.maxRam || 8192;
-            ramInput.value = data.defaults?.ram || 1024;
+            const availableRam = data.stats.availableRam || 0;
+            const availableCpu = data.stats.availableCpu || 0;
+            const availableDisk = data.stats.availableDisk || 0;
             
-            diskInput.min = data.stats.minDisk || 5;
-            diskInput.max = data.stats.maxDisk || 100;
-            diskInput.value = data.defaults?.disk || 10;
+            ramInput.min = 1;
+            ramInput.max = availableRam;
+            ramInput.value = Math.min(data.defaults?.ram || 1024, availableRam);
             
-            cpuInput.min = data.stats.minCpu || 25;
-            cpuInput.max = data.stats.maxCpu || 400;
-            cpuInput.value = data.defaults?.cpu || 100;
+            diskInput.min = 1;
+            diskInput.max = availableDisk;
+            diskInput.value = Math.min(data.defaults?.disk || 10, availableDisk);
+            
+            cpuInput.min = 1;
+            cpuInput.max = availableCpu;
+            cpuInput.value = Math.min(data.defaults?.cpu || 100, availableCpu);
             
             ioInput.max = data.stats.maxIo || 100;
             ioInput.value = data.defaults?.io || 0;
@@ -503,6 +515,8 @@ const App = {
 
         const tabConsole = document.getElementById('tab-console');
         const tabStats = document.getElementById('tab-stats');
+        const tabSnapshots = document.getElementById('tab-snapshots');
+        const tabSchedules = document.getElementById('tab-schedules');
         const tabSettings = document.getElementById('tab-settings');
         const serverContent = document.getElementById('server-content');
         
@@ -512,6 +526,8 @@ const App = {
         const renderCurrentTab = () => {
             tabConsole.className = `tab-btn ${currentTab === 'console' ? 'active' : ''}`;
             tabStats.className = `tab-btn ${currentTab === 'stats' ? 'active' : ''}`;
+            tabSnapshots.className = `tab-btn ${currentTab === 'snapshots' ? 'active' : ''}`;
+            tabSchedules.className = `tab-btn ${currentTab === 'schedules' ? 'active' : ''}`;
             tabSettings.className = `tab-btn ${currentTab === 'settings' ? 'active' : ''}`;
             
             if (statsInterval) {
@@ -524,6 +540,12 @@ const App = {
             } else if (currentTab === 'stats') {
                 App.cleanupTerminal();
                 App.renderServerStats(serverContent, id, server, (interval) => { statsInterval = interval; });
+            } else if (currentTab === 'snapshots') {
+                App.cleanupTerminal();
+                App.renderServerSnapshots(serverContent, id, server);
+            } else if (currentTab === 'schedules') {
+                App.cleanupTerminal();
+                App.renderServerSchedules(serverContent, id, server);
             } else {
                 App.cleanupTerminal();
                 App.renderServerSettings(serverContent, id, server, data, () => updateStatus(server.status === 'running'));
@@ -540,6 +562,20 @@ const App = {
         tabStats.onclick = () => {
             if (currentTab !== 'stats') {
                 currentTab = 'stats';
+                renderCurrentTab();
+            }
+        };
+        
+        tabSnapshots.onclick = () => {
+            if (currentTab !== 'snapshots') {
+                currentTab = 'snapshots';
+                renderCurrentTab();
+            }
+        };
+        
+        tabSchedules.onclick = () => {
+            if (currentTab !== 'schedules') {
+                currentTab = 'schedules';
                 renderCurrentTab();
             }
         };
@@ -768,6 +804,129 @@ const App = {
             
             App.navigate('/dashboard');
         };
+        
+        // Tags
+        const tagsContainer = document.getElementById('tags-container');
+        const renderTags = (tags) => {
+            tagsContainer.innerHTML = (tags || []).map(t => `
+                <span class="badge" style="padding: 0.25rem 0.5rem;">
+                    ${t}
+                    <span class="remove-tag" data-tag="${t}" style="cursor: pointer; margin-left: 4px;">&times;</span>
+                </span>
+            `).join('');
+            
+            tagsContainer.querySelectorAll('.remove-tag').forEach(btn => {
+                btn.onclick = async () => {
+                    const newTags = (server.tags || []).filter(t => t !== btn.dataset.tag);
+                    await fetch(`/api/server/${id}/tags`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                        body: JSON.stringify({ tags: newTags })
+                    });
+                    server.tags = newTags;
+                    renderTags(newTags);
+                };
+            });
+        };
+        renderTags(server.tags);
+        
+        document.getElementById('btn-add-tag').onclick = async () => {
+            const input = document.getElementById('new-tag-input');
+            const tag = input.value.trim();
+            if (!tag) return;
+            
+            const newTags = [...(server.tags || []), tag].slice(0, 10);
+            await fetch(`/api/server/${id}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ tags: newTags })
+            });
+            server.tags = newTags;
+            renderTags(newTags);
+            input.value = '';
+        };
+        
+        // Notes
+        document.getElementById('vm-notes').value = server.notes || '';
+        document.getElementById('btn-save-notes').onclick = async () => {
+            const notes = document.getElementById('vm-notes').value;
+            const btn = document.getElementById('btn-save-notes');
+            btn.disabled = true;
+            
+            await fetch(`/api/server/${id}/notes`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ notes })
+            });
+            
+            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">check</span> Saved';
+            setTimeout(() => {
+                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">save</span> Save Notes';
+                btn.disabled = false;
+            }, 2000);
+        };
+        
+        // Alerts
+        const loadAlerts = async () => {
+            const res = await fetch('/api/alerts', {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const data = await res.json();
+            const serverAlerts = (data.alerts || []).filter(a => a.serverId === id);
+            const list = document.getElementById('alerts-list');
+            
+            if (serverAlerts.length > 0) {
+                list.innerHTML = serverAlerts.map(a => `
+                    <div class="d-flex justify-between align-center" style="padding: 0.5rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
+                        <div>
+                            <span class="badge ${a.triggered ? 'running' : ''}">${a.metric.toUpperCase()}</span>
+                            <span class="text-sm ml-2">${a.comparison} ${a.threshold}%</span>
+                            <span class="text-sm text-muted ml-2">→ ${a.action}</span>
+                        </div>
+                        <button class="btn btn-sm btn-danger btn-delete-alert" data-id="${a.id}">
+                            <span class="material-symbols-outlined icon-sm">delete</span>
+                        </button>
+                    </div>
+                `).join('');
+                
+                list.querySelectorAll('.btn-delete-alert').forEach(btn => {
+                    btn.onclick = async () => {
+                        await fetch(`/api/alerts/${btn.dataset.id}`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        loadAlerts();
+                    };
+                });
+            } else {
+                list.innerHTML = '<div class="text-muted text-sm">No alerts configured</div>';
+            }
+        };
+        loadAlerts();
+        
+        document.getElementById('btn-add-alert').onclick = () => {
+            document.getElementById('alert-form-container').classList.remove('hidden');
+        };
+        
+        document.getElementById('btn-cancel-alert').onclick = () => {
+            document.getElementById('alert-form-container').classList.add('hidden');
+        };
+        
+        document.getElementById('btn-save-alert').onclick = async () => {
+            const metric = document.getElementById('alert-metric').value;
+            const comparison = document.getElementById('alert-comparison').value;
+            const threshold = document.getElementById('alert-threshold').value;
+            const action = document.getElementById('alert-action').value;
+            
+            await fetch('/api/alerts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ serverId: id, metric, comparison, threshold, action })
+            });
+            
+            document.getElementById('alert-form-container').classList.add('hidden');
+            loadAlerts();
+        };
     },
 
     renderServerConsole: (container, id, isInitiallyRunning, statusCallback, server) => {
@@ -796,8 +955,18 @@ const App = {
         window.addEventListener('resize', () => App.fitAddon.fit());
         
         App.socket = io({
-            auth: { token: localStorage.getItem('token') }
+            auth: { token: localStorage.getItem('token') },
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000
         });
+        
+        App.socket.on('connect', () => {
+            App.socket.emit('join-server', id);
+        });
+        
         App.socket.emit('join-server', id);
         
         App.term.onData(d => App.socket.emit('input', { serverId: id, data: d }));
@@ -807,9 +976,13 @@ const App = {
             statusCallback(running);
         });
 
-        App.socket.on('connect_error', (err) => {
-             App.term.write('\r\n\x1b[31mConnection error: ' + err.message + '\x1b[0m\r\n');
+        App.socket.on('disconnect', (reason) => {
+            if (reason === 'io server disconnect') {
+                App.socket.connect();
+            }
         });
+
+        App.socket.on('connect_error', () => {});
     },
 
     // =====================
@@ -823,7 +996,7 @@ const App = {
         container.innerHTML = '';
         container.appendChild(tmpl);
         
-        const tabs = ['servers', 'users', 'config'];
+        const tabs = ['servers', 'users', 'audit', 'maintenance', 'config'];
         tabs.forEach(t => {
             const btn = document.getElementById(`tab-${t}`);
             btn.className = `tab-btn ${t === tab ? 'active' : ''}`;
@@ -836,6 +1009,10 @@ const App = {
             await App.renderAdminServers(content);
         } else if (tab === 'users') {
             await App.renderAdminUsers(content);
+        } else if (tab === 'audit') {
+            await App.renderAdminAudit(content);
+        } else if (tab === 'maintenance') {
+            await App.renderAdminMaintenance(content);
         } else if (tab === 'config') {
             await App.renderAdminConfig(content);
         }
@@ -1056,6 +1233,515 @@ const App = {
             
             btn.disabled = false;
             btn.innerHTML = '<span class="material-symbols-outlined icon-sm">stop</span> Stop All VMs';
+        };
+    },
+    
+    renderAdminAudit: async (container) => {
+        const tmpl = document.getElementById('admin-audit-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        let offset = 0;
+        const limit = 50;
+        
+        const loadLogs = async () => {
+            const action = document.getElementById('audit-filter-action').value;
+            const params = new URLSearchParams({ limit, offset });
+            if (action) params.append('action', action);
+            
+            const res = await fetch(`/api/admin/audit?${params}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const logs = await res.json();
+            
+            const tbody = document.getElementById('audit-logs-list');
+            tbody.innerHTML = logs.map(log => `
+                <tr>
+                    <td class="text-sm">${new Date(log.timestamp).toLocaleString()}</td>
+                    <td>${log.username || '-'}</td>
+                    <td><span class="badge">${log.action}</span></td>
+                    <td class="text-sm text-muted">${log.serverId ? `VM: ${log.serverId}` : ''} ${log.serverName || ''}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="4" class="text-muted">No logs found</td></tr>';
+            
+            document.getElementById('btn-audit-prev').disabled = offset === 0;
+            document.getElementById('btn-audit-next').disabled = logs.length < limit;
+        };
+        
+        await loadLogs();
+        
+        document.getElementById('audit-filter-action').onchange = () => { offset = 0; loadLogs(); };
+        document.getElementById('btn-refresh-audit').onclick = loadLogs;
+        document.getElementById('btn-audit-prev').onclick = () => { offset = Math.max(0, offset - limit); loadLogs(); };
+        document.getElementById('btn-audit-next').onclick = () => { offset += limit; loadLogs(); };
+    },
+    
+    renderAdminMaintenance: async (container) => {
+        const tmpl = document.getElementById('admin-maintenance-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const res = await fetch('/api/admin/maintenance', {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        const data = await res.json();
+        
+        document.getElementById('maint-enabled').checked = data.maintenance;
+        document.getElementById('maint-message').value = data.message || '';
+        
+        const statusDiv = document.getElementById('maintenance-status');
+        statusDiv.innerHTML = data.maintenance 
+            ? '<div class="alert alert-warning"><span class="material-symbols-outlined icon-sm">warning</span> Maintenance mode is currently ENABLED</div>'
+            : '<div class="alert alert-success"><span class="material-symbols-outlined icon-sm">check_circle</span> System is operating normally</div>';
+        
+        // Load servers and users for transfer
+        const [serversRes, usersRes] = await Promise.all([
+            fetch('/api/admin/servers?limit=100', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }),
+            fetch('/api/admin/users', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+        ]);
+        const servers = (await serversRes.json()).servers;
+        const users = await usersRes.json();
+        
+        document.getElementById('transfer-server').innerHTML = '<option value="">Select a VM</option>' + 
+            servers.map(s => `<option value="${s.id}">${s.name} (${s.ownerName})</option>`).join('');
+        document.getElementById('transfer-user').innerHTML = '<option value="">Select user</option>' +
+            users.map(u => `<option value="${u.id}">${u.username}</option>`).join('');
+        
+        document.getElementById('btn-save-maintenance').onclick = async () => {
+            const enabled = document.getElementById('maint-enabled').checked;
+            const message = document.getElementById('maint-message').value;
+            const stopAllVms = document.getElementById('maint-stop-vms').checked;
+            
+            await fetch('/api/admin/maintenance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ enabled, message, stopAllVms })
+            });
+            
+            App.renderAdminMaintenance(container);
+        };
+        
+        document.getElementById('btn-transfer-vm').onclick = async () => {
+            const serverId = document.getElementById('transfer-server').value;
+            const newOwnerId = document.getElementById('transfer-user').value;
+            const statusEl = document.getElementById('transfer-status');
+            
+            if (!serverId || !newOwnerId) {
+                statusEl.textContent = 'Select both VM and new owner';
+                statusEl.className = 'text-sm ml-3 text-danger';
+                return;
+            }
+            
+            const res = await fetch(`/api/admin/server/${serverId}/transfer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ newOwnerId })
+            });
+            
+            const data = await res.json();
+            if (res.ok) {
+                statusEl.textContent = data.message;
+                statusEl.className = 'text-sm ml-3 text-success';
+                App.renderAdminMaintenance(container);
+            } else {
+                statusEl.textContent = data.error;
+                statusEl.className = 'text-sm ml-3 text-danger';
+            }
+        };
+    },
+    
+    renderServerSnapshots: async (container, id, server) => {
+        const tmpl = document.getElementById('server-snapshots-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const loadSnapshots = async () => {
+            const res = await fetch(`/api/server/${id}/snapshots`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const data = await res.json();
+            const list = document.getElementById('snapshots-list');
+            
+            if (data.snapshots && data.snapshots.length > 0) {
+                list.innerHTML = data.snapshots.map(s => `
+                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
+                        <div>
+                            <strong>${s.name || s.id}</strong>
+                            <div class="text-sm text-muted">${s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}</div>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-secondary btn-restore" data-id="${s.id}">
+                                <span class="material-symbols-outlined icon-sm">restore</span> Restore
+                            </button>
+                            <button class="btn btn-sm btn-danger btn-delete-snap" data-id="${s.id}">
+                                <span class="material-symbols-outlined icon-sm">delete</span>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+                
+                list.querySelectorAll('.btn-restore').forEach(btn => {
+                    btn.onclick = async () => {
+                        if (!confirm('Restore this snapshot? Current state will be lost.')) return;
+                        btn.disabled = true;
+                        await fetch(`/api/server/${id}/snapshots/${btn.dataset.id}/restore`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        btn.disabled = false;
+                        alert('Snapshot restored');
+                    };
+                });
+                
+                list.querySelectorAll('.btn-delete-snap').forEach(btn => {
+                    btn.onclick = async () => {
+                        if (!confirm('Delete this snapshot?')) return;
+                        await fetch(`/api/server/${id}/snapshots/${btn.dataset.id}`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        loadSnapshots();
+                    };
+                });
+            } else {
+                list.innerHTML = '<div class="text-muted">No snapshots yet</div>';
+            }
+        };
+        
+        await loadSnapshots();
+        
+        document.getElementById('btn-create-snapshot').onclick = async () => {
+            const name = prompt('Snapshot name (optional):');
+            const btn = document.getElementById('btn-create-snapshot');
+            btn.disabled = true;
+            btn.textContent = 'Creating...';
+            
+            const res = await fetch(`/api/server/${id}/snapshots`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ name: name || `Snapshot ${new Date().toLocaleDateString()}` })
+            });
+            
+            if (!res.ok) {
+                const data = await res.json();
+                alert('Error: ' + data.error);
+            }
+            
+            btn.disabled = false;
+            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">add</span> Create Snapshot';
+            loadSnapshots();
+        };
+    },
+    
+    renderServerSchedules: async (container, id, server) => {
+        const tmpl = document.getElementById('server-schedules-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const loadSchedules = async () => {
+            const res = await fetch(`/api/server/${id}/schedules`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const data = await res.json();
+            const list = document.getElementById('schedules-list');
+            
+            if (data.schedules && data.schedules.length > 0) {
+                list.innerHTML = data.schedules.map(s => `
+                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
+                        <div>
+                            <span class="badge">${s.action.toUpperCase()}</span>
+                            <span class="text-sm ml-2">${s.cronExpression}</span>
+                            ${s.lastRun ? `<div class="text-sm text-muted">Last run: ${new Date(s.lastRun).toLocaleString()}</div>` : ''}
+                        </div>
+                        <button class="btn btn-sm btn-danger btn-delete-sched" data-id="${s.id}">
+                            <span class="material-symbols-outlined icon-sm">delete</span>
+                        </button>
+                    </div>
+                `).join('');
+                
+                list.querySelectorAll('.btn-delete-sched').forEach(btn => {
+                    btn.onclick = async () => {
+                        if (!confirm('Delete this schedule?')) return;
+                        await fetch(`/api/server/${id}/schedules/${btn.dataset.id}`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        loadSchedules();
+                    };
+                });
+            } else {
+                list.innerHTML = '<div class="text-muted">No schedules yet</div>';
+            }
+        };
+        
+        await loadSchedules();
+        
+        document.getElementById('btn-add-schedule').onclick = () => {
+            document.getElementById('schedule-form-container').classList.remove('hidden');
+        };
+        
+        document.getElementById('btn-cancel-schedule').onclick = () => {
+            document.getElementById('schedule-form-container').classList.add('hidden');
+        };
+        
+        document.getElementById('btn-save-schedule').onclick = async () => {
+            const action = document.getElementById('sched-action').value;
+            const hour = document.getElementById('sched-hour').value;
+            const minute = document.getElementById('sched-minute').value;
+            const days = document.getElementById('sched-days').value;
+            
+            const cronExpression = `${minute} ${hour} * * ${days}`;
+            
+            await fetch(`/api/server/${id}/schedules`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ action, cronExpression })
+            });
+            
+            document.getElementById('schedule-form-container').classList.add('hidden');
+            loadSchedules();
+        };
+    },
+    
+    renderAccountPage: async (container, tab) => {
+        const tmpl = document.getElementById('account-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const tabs = ['apikeys', 'webhooks', 'prefs', 'activity'];
+        tabs.forEach(t => {
+            const btn = document.getElementById(`tab-${t}`);
+            btn.className = `tab-btn ${t === tab ? 'active' : ''}`;
+            btn.onclick = () => App.navigate(`/account/${t}`);
+        });
+        
+        const content = document.getElementById('account-content');
+        
+        if (tab === 'apikeys') await App.renderApiKeys(content);
+        else if (tab === 'webhooks') await App.renderWebhooks(content);
+        else if (tab === 'prefs') await App.renderPreferences(content);
+        else if (tab === 'activity') await App.renderActivity(content);
+    },
+    
+    renderApiKeys: async (container) => {
+        const tmpl = document.getElementById('apikeys-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const loadKeys = async () => {
+            const res = await fetch('/api/keys', {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const data = await res.json();
+            const list = document.getElementById('apikeys-list');
+            
+            if (data.keys && data.keys.length > 0) {
+                list.innerHTML = data.keys.map(k => `
+                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
+                        <div>
+                            <strong>${k.name}</strong>
+                            <code class="text-sm ml-2">${k.prefix}</code>
+                            <div class="text-sm text-muted">
+                                Permissions: ${k.permissions.join(', ')}
+                                ${k.lastUsed ? ` • Last used: ${new Date(k.lastUsed).toLocaleDateString()}` : ''}
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-danger btn-delete-key" data-id="${k.id}">
+                            <span class="material-symbols-outlined icon-sm">delete</span>
+                        </button>
+                    </div>
+                `).join('');
+                
+                list.querySelectorAll('.btn-delete-key').forEach(btn => {
+                    btn.onclick = async () => {
+                        if (!confirm('Delete this API key?')) return;
+                        await fetch(`/api/keys/${btn.dataset.id}`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        loadKeys();
+                    };
+                });
+            } else {
+                list.innerHTML = '<div class="text-muted">No API keys yet</div>';
+            }
+        };
+        
+        await loadKeys();
+        
+        document.getElementById('btn-create-key').onclick = () => {
+            document.getElementById('create-key-form').classList.remove('hidden');
+        };
+        
+        document.getElementById('btn-cancel-key').onclick = () => {
+            document.getElementById('create-key-form').classList.add('hidden');
+        };
+        
+        document.getElementById('btn-save-key').onclick = async () => {
+            const name = document.getElementById('key-name').value || 'API Key';
+            const permissions = [];
+            if (document.getElementById('key-perm-read').checked) permissions.push('read');
+            if (document.getElementById('key-perm-write').checked) permissions.push('write');
+            
+            const res = await fetch('/api/keys', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ name, permissions })
+            });
+            
+            const data = await res.json();
+            if (data.key) {
+                document.getElementById('new-key-value').textContent = data.key;
+                document.getElementById('new-key-alert').classList.remove('hidden');
+            }
+            
+            document.getElementById('create-key-form').classList.add('hidden');
+            loadKeys();
+        };
+    },
+    
+    renderWebhooks: async (container) => {
+        const tmpl = document.getElementById('webhooks-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const loadWebhooks = async () => {
+            const res = await fetch('/api/webhooks', {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const data = await res.json();
+            const list = document.getElementById('webhooks-list');
+            
+            if (data.webhooks && data.webhooks.length > 0) {
+                list.innerHTML = data.webhooks.map(w => `
+                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
+                        <div>
+                            <strong>${w.name}</strong>
+                            <span class="badge ml-2 ${w.enabled ? '' : 'suspended'}">${w.enabled ? 'ACTIVE' : 'DISABLED'}</span>
+                            <div class="text-sm text-muted">${w.url}</div>
+                            <div class="text-sm">${w.events.map(e => `<span class="badge" style="font-size: 0.7rem;">${e}</span>`).join(' ')}</div>
+                        </div>
+                        <button class="btn btn-sm btn-danger btn-delete-wh" data-id="${w.id}">
+                            <span class="material-symbols-outlined icon-sm">delete</span>
+                        </button>
+                    </div>
+                `).join('');
+                
+                list.querySelectorAll('.btn-delete-wh').forEach(btn => {
+                    btn.onclick = async () => {
+                        if (!confirm('Delete this webhook?')) return;
+                        await fetch(`/api/webhooks/${btn.dataset.id}`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        loadWebhooks();
+                    };
+                });
+            } else {
+                list.innerHTML = '<div class="text-muted">No webhooks yet</div>';
+            }
+        };
+        
+        await loadWebhooks();
+        
+        document.getElementById('btn-create-webhook').onclick = () => {
+            document.getElementById('create-webhook-form').classList.remove('hidden');
+        };
+        
+        document.getElementById('btn-cancel-webhook').onclick = () => {
+            document.getElementById('create-webhook-form').classList.add('hidden');
+        };
+        
+        document.getElementById('btn-save-webhook').onclick = async () => {
+            const name = document.getElementById('wh-name').value || 'Webhook';
+            const url = document.getElementById('wh-url').value;
+            const secret = document.getElementById('wh-secret').value;
+            const events = Array.from(document.querySelectorAll('.wh-event:checked')).map(c => c.value);
+            
+            if (!url) return alert('URL is required');
+            if (events.length === 0) return alert('Select at least one event');
+            
+            await fetch('/api/webhooks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ name, url, secret, events })
+            });
+            
+            document.getElementById('create-webhook-form').classList.add('hidden');
+            loadWebhooks();
+        };
+    },
+    
+    renderPreferences: async (container) => {
+        const tmpl = document.getElementById('preferences-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const res = await fetch('/api/preferences', {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        const data = await res.json();
+        const prefs = data.preferences || {};
+        
+        document.getElementById('pref-theme').value = prefs.theme || 'dark';
+        document.getElementById('pref-font-size').value = prefs.terminalFontSize || 14;
+        document.getElementById('pref-default-view').value = prefs.defaultView || 'console';
+        document.getElementById('pref-notifications').checked = prefs.notifications || false;
+        
+        document.getElementById('btn-save-prefs').onclick = async () => {
+            const theme = document.getElementById('pref-theme').value;
+            const terminalFontSize = parseInt(document.getElementById('pref-font-size').value);
+            const defaultView = document.getElementById('pref-default-view').value;
+            const notifications = document.getElementById('pref-notifications').checked;
+            
+            await fetch('/api/preferences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ theme, terminalFontSize, defaultView, notifications })
+            });
+            
+            document.getElementById('prefs-success').classList.remove('hidden');
+            setTimeout(() => document.getElementById('prefs-success').classList.add('hidden'), 2000);
+        };
+    },
+    
+    renderActivity: async (container) => {
+        const tmpl = document.getElementById('activity-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        let offset = 0;
+        const limit = 20;
+        
+        const loadActivity = async (append = false) => {
+            const res = await fetch(`/api/activity?limit=${limit}&offset=${offset}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            const logs = await res.json();
+            const list = document.getElementById('activity-list');
+            
+            const html = logs.map(log => `
+                <div style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                    <span class="badge">${log.action}</span>
+                    <span class="text-sm text-muted ml-2">${new Date(log.timestamp).toLocaleString()}</span>
+                    ${log.serverName ? `<span class="text-sm ml-2">${log.serverName}</span>` : ''}
+                </div>
+            `).join('');
+            
+            if (append) {
+                list.innerHTML += html;
+            } else {
+                list.innerHTML = html || '<div class="text-muted">No activity yet</div>';
+            }
+            
+            document.getElementById('btn-load-more-activity').style.display = logs.length < limit ? 'none' : 'inline-block';
+        };
+        
+        await loadActivity();
+        
+        document.getElementById('btn-load-more-activity').onclick = () => {
+            offset += limit;
+            loadActivity(true);
         };
     },
     

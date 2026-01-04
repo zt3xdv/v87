@@ -260,6 +260,14 @@
                 <span class="material-symbols-outlined icon-sm">monitoring</span>
                 Stats
             </button>
+            <button class="tab-btn" id="tab-snapshots">
+                <span class="material-symbols-outlined icon-sm">photo_camera</span>
+                Snapshots
+            </button>
+            <button class="tab-btn" id="tab-schedules">
+                <span class="material-symbols-outlined icon-sm">schedule</span>
+                Schedules
+            </button>
             <button class="tab-btn" id="tab-settings">
                 <span class="material-symbols-outlined icon-sm">settings</span>
                 Settings
@@ -435,6 +443,87 @@
             </div>
         </div>
         
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">sell</span>
+                Tags
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-2">Add tags to organize your VMs (max 10 tags)</p>
+                <div class="d-flex gap-2 flex-wrap mb-3" id="tags-container"></div>
+                <div class="d-flex gap-2">
+                    <input type="text" id="new-tag-input" class="form-control" placeholder="Add a tag..." style="max-width: 200px;">
+                    <button id="btn-add-tag" class="btn btn-secondary btn-sm">
+                        <span class="material-symbols-outlined icon-sm">add</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">notes</span>
+                Notes
+            </div>
+            <div class="card-body">
+                <textarea id="vm-notes" class="form-control" rows="4" placeholder="Add notes about this VM..." style="resize: vertical;"></textarea>
+                <button id="btn-save-notes" class="btn btn-secondary mt-2">
+                    <span class="material-symbols-outlined icon-sm">save</span>
+                    Save Notes
+                </button>
+            </div>
+        </div>
+        
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">notifications</span>
+                    Alerts
+                </span>
+                <button id="btn-add-alert" class="btn btn-sm btn-accent">
+                    <span class="material-symbols-outlined icon-sm">add</span>
+                    Add Alert
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">Get notified or take action when thresholds are exceeded.</p>
+                <div id="alerts-list"></div>
+                <div id="alert-form-container" class="hidden mt-3" style="padding: 1rem; background: var(--bg-app); border-radius: var(--radius-sm);">
+                    <div class="d-flex gap-3 flex-wrap mb-3">
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Metric</label>
+                            <select id="alert-metric" class="form-control">
+                                <option value="cpu">CPU Usage</option>
+                                <option value="memory">Memory Usage</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Condition</label>
+                            <select id="alert-comparison" class="form-control">
+                                <option value="above">Above</option>
+                                <option value="below">Below</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Threshold (%)</label>
+                            <input type="number" id="alert-threshold" class="form-control" value="80" min="0" max="100">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Action</label>
+                        <select id="alert-action" class="form-control">
+                            <option value="notify">Notify via webhook</option>
+                            <option value="stop">Stop VM</option>
+                        </select>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button id="btn-save-alert" class="btn btn-success btn-sm">Save Alert</button>
+                        <button id="btn-cancel-alert" class="btn btn-secondary btn-sm">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <div class="card" style="border-color: var(--danger);">
             <div class="card-header" style="color: var(--danger);">
                 <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">warning</span>
@@ -462,6 +551,92 @@
             <div id="terminal" style="height: 500px;"></div>
         </div>
     </template>
+    
+    <!-- VM SNAPSHOTS TAB -->
+    <template id="server-snapshots-template">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">photo_camera</span>
+                    Snapshots
+                </span>
+                <button id="btn-create-snapshot" class="btn btn-sm btn-accent">
+                    <span class="material-symbols-outlined icon-sm">add</span>
+                    Create Snapshot
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">Save the current state of your VM. Maximum 5 snapshots.</p>
+                <div id="snapshots-list">
+                    <div class="text-muted text-sm">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- VM SCHEDULES TAB -->
+    <template id="server-schedules-template">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">schedule</span>
+                    Scheduled Actions
+                </span>
+                <button id="btn-add-schedule" class="btn btn-sm btn-accent">
+                    <span class="material-symbols-outlined icon-sm">add</span>
+                    Add Schedule
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">Automatically start, stop, or restart your VM on a schedule.</p>
+                <div id="schedules-list">
+                    <div class="text-muted text-sm">Loading...</div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="schedule-form-container" class="card hidden">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">add_circle</span>
+                New Schedule
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label>Action</label>
+                    <select id="sched-action" class="form-control">
+                        <option value="start">Start VM</option>
+                        <option value="stop">Stop VM</option>
+                        <option value="restart">Restart VM</option>
+                    </select>
+                </div>
+                <div class="d-flex gap-3 flex-wrap">
+                    <div class="form-group" style="flex: 1; min-width: 100px;">
+                        <label>Hour (0-23)</label>
+                        <input type="number" id="sched-hour" class="form-control" value="0" min="0" max="23">
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 100px;">
+                        <label>Minute (0-59)</label>
+                        <input type="number" id="sched-minute" class="form-control" value="0" min="0" max="59">
+                    </div>
+                    <div class="form-group" style="flex: 2; min-width: 150px;">
+                        <label>Days</label>
+                        <select id="sched-days" class="form-control">
+                            <option value="*">Every day</option>
+                            <option value="1-5">Weekdays (Mon-Fri)</option>
+                            <option value="0,6">Weekends (Sat-Sun)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="d-flex gap-2">
+                    <button id="btn-save-schedule" class="btn btn-success">
+                        <span class="material-symbols-outlined icon-sm">save</span>
+                        Save Schedule
+                    </button>
+                    <button id="btn-cancel-schedule" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </template>
 
     <!-- ADMIN LAYOUT -->
     <template id="admin-layout-template">
@@ -481,6 +656,14 @@
             <button class="tab-btn" id="tab-users">
                 <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">group</span>
                 Users
+            </button>
+            <button class="tab-btn" id="tab-audit">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">history</span>
+                Audit Log
+            </button>
+            <button class="tab-btn" id="tab-maintenance">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">build</span>
+                Maintenance
             </button>
             <button class="tab-btn" id="tab-config">
                 <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">settings</span>
@@ -670,6 +853,315 @@
                     </button>
                     <span class="text-muted text-sm">Force stop all running virtual machines</span>
                 </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- ADMIN AUDIT LOG TAB -->
+    <template id="admin-audit-template">
+        <div class="card">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">history</span>
+                    Audit Log
+                </span>
+                <div class="d-flex gap-2">
+                    <select id="audit-filter-action" class="form-control" style="max-width: 150px; padding: 0.4rem;">
+                        <option value="">All Actions</option>
+                        <option value="login">Login</option>
+                        <option value="register">Register</option>
+                        <option value="vm_create">VM Create</option>
+                        <option value="vm_delete">VM Delete</option>
+                        <option value="vm_start">VM Start</option>
+                        <option value="vm_stop">VM Stop</option>
+                    </select>
+                    <button id="btn-refresh-audit" class="btn btn-sm btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">refresh</span>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div style="overflow-x: auto;">
+                    <table class="file-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-logs-list"></tbody>
+                    </table>
+                </div>
+                <div class="d-flex gap-2 mt-3">
+                    <button id="btn-audit-prev" class="btn btn-sm btn-secondary" disabled>Previous</button>
+                    <button id="btn-audit-next" class="btn btn-sm btn-secondary">Next</button>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- ADMIN MAINTENANCE TAB -->
+    <template id="admin-maintenance-template">
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">build</span>
+                Maintenance Mode
+            </div>
+            <div class="card-body">
+                <div id="maintenance-status" class="mb-4"></div>
+                <div class="form-group">
+                    <label class="d-flex align-center gap-2">
+                        <input type="checkbox" id="maint-enabled" style="width: auto;">
+                        Enable Maintenance Mode
+                    </label>
+                    <small class="text-muted">When enabled, non-admin users cannot access the panel</small>
+                </div>
+                <div class="form-group">
+                    <label>Maintenance Message</label>
+                    <input type="text" id="maint-message" class="form-control" placeholder="System is under maintenance">
+                </div>
+                <div class="form-group">
+                    <label class="d-flex align-center gap-2">
+                        <input type="checkbox" id="maint-stop-vms" style="width: auto;">
+                        Stop all VMs when enabling
+                    </label>
+                </div>
+                <button id="btn-save-maintenance" class="btn btn-accent">
+                    <span class="material-symbols-outlined icon-sm">save</span>
+                    Save
+                </button>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">swap_horiz</span>
+                Transfer VM
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">Transfer ownership of a VM to another user.</p>
+                <div class="d-flex gap-3 flex-wrap mb-3">
+                    <div class="form-group" style="flex: 1; min-width: 200px;">
+                        <label>Select VM</label>
+                        <select id="transfer-server" class="form-control">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 200px;">
+                        <label>New Owner</label>
+                        <select id="transfer-user" class="form-control">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="btn-transfer-vm" class="btn btn-secondary">
+                    <span class="material-symbols-outlined icon-sm">swap_horiz</span>
+                    Transfer VM
+                </button>
+                <span id="transfer-status" class="text-sm ml-3"></span>
+            </div>
+        </div>
+    </template>
+    
+    <!-- ACCOUNT SETTINGS PAGE -->
+    <template id="account-template">
+        <div class="mb-5">
+            <h2 class="mb-1">
+                <span class="material-symbols-outlined icon-md" style="margin-right: 8px; vertical-align: -4px;">account_circle</span>
+                Account Settings
+            </h2>
+            <p class="text-secondary text-sm mb-0">Manage your API keys, webhooks, and preferences.</p>
+        </div>
+        
+        <div class="server-tabs mb-4">
+            <button class="tab-btn active" id="tab-apikeys">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">key</span>
+                API Keys
+            </button>
+            <button class="tab-btn" id="tab-webhooks">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">webhook</span>
+                Webhooks
+            </button>
+            <button class="tab-btn" id="tab-prefs">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">tune</span>
+                Preferences
+            </button>
+            <button class="tab-btn" id="tab-activity">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">history</span>
+                Activity
+            </button>
+        </div>
+        
+        <div id="account-content"></div>
+    </template>
+    
+    <!-- API KEYS TAB -->
+    <template id="apikeys-template">
+        <div class="card">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">key</span>
+                    API Keys
+                </span>
+                <button id="btn-create-key" class="btn btn-sm btn-accent">
+                    <span class="material-symbols-outlined icon-sm">add</span>
+                    Create Key
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">Use API keys to access your VMs programmatically. Maximum 5 keys.</p>
+                <div id="new-key-alert" class="alert alert-success hidden mb-3">
+                    <strong>New API Key Created:</strong>
+                    <code id="new-key-value" style="display: block; margin-top: 0.5rem; word-break: break-all;"></code>
+                    <small class="text-muted">Copy this key now. It won't be shown again.</small>
+                </div>
+                <div id="apikeys-list"></div>
+            </div>
+        </div>
+        
+        <div id="create-key-form" class="card mt-4 hidden">
+            <div class="card-header">Create New API Key</div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label>Key Name</label>
+                    <input type="text" id="key-name" class="form-control" placeholder="My API Key">
+                </div>
+                <div class="form-group">
+                    <label>Permissions</label>
+                    <div class="d-flex gap-3">
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" id="key-perm-read" checked style="width: auto;"> Read
+                        </label>
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" id="key-perm-write" style="width: auto;"> Write
+                        </label>
+                    </div>
+                </div>
+                <div class="d-flex gap-2">
+                    <button id="btn-save-key" class="btn btn-success">Create Key</button>
+                    <button id="btn-cancel-key" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- WEBHOOKS TAB -->
+    <template id="webhooks-template">
+        <div class="card">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">webhook</span>
+                    Webhooks
+                </span>
+                <button id="btn-create-webhook" class="btn btn-sm btn-accent">
+                    <span class="material-symbols-outlined icon-sm">add</span>
+                    Create Webhook
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">Receive HTTP notifications for VM events. Maximum 5 webhooks.</p>
+                <div id="webhooks-list"></div>
+            </div>
+        </div>
+        
+        <div id="create-webhook-form" class="card mt-4 hidden">
+            <div class="card-header">Create New Webhook</div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="wh-name" class="form-control" placeholder="My Webhook">
+                </div>
+                <div class="form-group">
+                    <label>URL</label>
+                    <input type="url" id="wh-url" class="form-control" placeholder="https://example.com/webhook">
+                </div>
+                <div class="form-group">
+                    <label>Secret (optional)</label>
+                    <input type="text" id="wh-secret" class="form-control" placeholder="Optional secret for verification">
+                </div>
+                <div class="form-group">
+                    <label>Events</label>
+                    <div class="d-flex gap-3 flex-wrap">
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" class="wh-event" value="vm_start" style="width: auto;"> VM Start
+                        </label>
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" class="wh-event" value="vm_stop" style="width: auto;"> VM Stop
+                        </label>
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" class="wh-event" value="vm_create" style="width: auto;"> VM Create
+                        </label>
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" class="wh-event" value="vm_delete" style="width: auto;"> VM Delete
+                        </label>
+                        <label class="d-flex align-center gap-2">
+                            <input type="checkbox" class="wh-event" value="alert_triggered" style="width: auto;"> Alert
+                        </label>
+                    </div>
+                </div>
+                <div class="d-flex gap-2">
+                    <button id="btn-save-webhook" class="btn btn-success">Create Webhook</button>
+                    <button id="btn-cancel-webhook" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- PREFERENCES TAB -->
+    <template id="preferences-template">
+        <div class="card">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">tune</span>
+                Preferences
+            </div>
+            <div class="card-body">
+                <div id="prefs-success" class="alert alert-success hidden mb-3">Preferences saved</div>
+                <div class="form-group">
+                    <label>Theme</label>
+                    <select id="pref-theme" class="form-control" style="max-width: 200px;">
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                        <option value="auto">Auto</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Terminal Font Size</label>
+                    <input type="number" id="pref-font-size" class="form-control" style="max-width: 100px;" min="10" max="24" value="14">
+                </div>
+                <div class="form-group">
+                    <label>Default VM View</label>
+                    <select id="pref-default-view" class="form-control" style="max-width: 200px;">
+                        <option value="console">Console</option>
+                        <option value="stats">Stats</option>
+                        <option value="settings">Settings</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="d-flex align-center gap-2">
+                        <input type="checkbox" id="pref-notifications" style="width: auto;">
+                        Enable browser notifications
+                    </label>
+                </div>
+                <button id="btn-save-prefs" class="btn btn-accent">
+                    <span class="material-symbols-outlined icon-sm">save</span>
+                    Save Preferences
+                </button>
+            </div>
+        </div>
+    </template>
+    
+    <!-- USER ACTIVITY TAB -->
+    <template id="activity-template">
+        <div class="card">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">history</span>
+                Recent Activity
+            </div>
+            <div class="card-body">
+                <div id="activity-list"></div>
+                <button id="btn-load-more-activity" class="btn btn-sm btn-secondary mt-3">Load More</button>
             </div>
         </div>
     </template>

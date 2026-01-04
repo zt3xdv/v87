@@ -1,5 +1,6 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { Server } from 'socket.io';
 import path from 'node:path';
@@ -82,10 +83,15 @@ io.use((socket, next) => {
     next();
 });
 
+const VALID_ID_REGEX = /^[A-Za-z0-9_-]+$/;
+function isValidId(id) {
+    return typeof id === 'string' && VALID_ID_REGEX.test(id) && id.length > 0 && id.length <= 64;
+}
+
 io.on('connection', (socket) => {
-    log(`Socket connected: ${socket.user.username} (${socket.id})`);
-    
     socket.on('join-server', async (serverId) => {
+        if (!isValidId(serverId)) return;
+        
         const serverData = db.getServer(serverId);
         if (!serverData) return;
         
@@ -94,7 +100,6 @@ io.on('connection', (socket) => {
         }
         
         socket.join(`server:${serverId}`);
-        log(`${socket.user.username} joined server ${serverId}`);
         
         const status = sandboxManager.getServerStatus(serverId);
         socket.emit('vm-status', status === 'running' ? 'started' : 'stopped');
@@ -108,7 +113,12 @@ io.on('connection', (socket) => {
     });
     
     socket.on('input', async (data) => {
+        if (!data || typeof data !== 'object') return;
         const { serverId, data: inputData } = data;
+        
+        if (!isValidId(serverId)) return;
+        if (typeof inputData !== 'string' || inputData.length > 8192) return;
+        
         const serverData = db.getServer(serverId);
         if (!serverData) return;
         
@@ -120,12 +130,11 @@ io.on('connection', (socket) => {
     });
     
     socket.on('leave-server', (serverId) => {
+        if (!isValidId(serverId)) return;
         socket.leave(`server:${serverId}`);
     });
     
-    socket.on('disconnect', () => {
-        log(`Socket disconnected: ${socket.user.username}`);
-    });
+    socket.on('disconnect', () => {});
 });
 
 sandboxManager.on('log', (serverId, data) => {
@@ -160,38 +169,66 @@ app.use(express.json());
 
 let LIMITS = config.limits || { 
     maxServers: 3, 
-    maxRam: 2048, 
-    maxDisk: 50,
+    maxRam: 4096,
+    maxDisk: 10,
     maxCpu: 400,
-    maxIo: 100,
-    minRam: 512,
-    minDisk: 5,
-    minCpu: 25
+    maxIo: 100
 };
 
 function getUserLimits(user) {
     const base = {
-        maxServers: LIMITS.maxServers,
-        maxRam: LIMITS.maxRam,
-        maxDisk: LIMITS.maxDisk,
-        maxCpu: LIMITS.maxCpu || 400,
-        maxIo: LIMITS.maxIo || 100,
-        minRam: LIMITS.minRam || 512,
-        minDisk: LIMITS.minDisk || 5,
-        minCpu: LIMITS.minCpu || 25
+        maxServers: LIMITS.maxServers ?? 3,
+        maxRam: LIMITS.maxRam ?? 4096,
+        maxDisk: LIMITS.maxDisk ?? 10,
+        maxCpu: LIMITS.maxCpu ?? 400,
+        maxIo: LIMITS.maxIo ?? 100
     };
     
     if (user.limits && Object.keys(user.limits).length > 0) {
         return {
             ...base,
-            maxServers: user.limits.maxServers || base.maxServers,
-            maxRam: user.limits.maxRam || base.maxRam,
-            maxDisk: user.limits.maxDisk || base.maxDisk,
-            maxCpu: user.limits.maxCpu || base.maxCpu,
-            maxIo: user.limits.maxIo || base.maxIo
+            maxServers: user.limits.maxServers ?? base.maxServers,
+            maxRam: user.limits.maxRam ?? base.maxRam,
+            maxDisk: user.limits.maxDisk ?? base.maxDisk,
+            maxCpu: user.limits.maxCpu ?? base.maxCpu,
+            maxIo: user.limits.maxIo ?? base.maxIo
         };
     }
     return base;
+}
+
+// =====================
+// AUDIT & WEBHOOKS HELPERS
+// =====================
+
+function audit(userId, username, action, details = {}) {
+    db.addAuditLog({ userId, username, action, ...details });
+}
+
+const WEBHOOK_EVENTS = ['vm_start', 'vm_stop', 'vm_create', 'vm_delete', 'alert_triggered'];
+
+async function triggerWebhooks(event, data) {
+    const webhooks = db.getWebhooksByEvent(event);
+    
+    for (const webhook of webhooks) {
+        try {
+            const payload = {
+                event,
+                timestamp: new Date().toISOString(),
+                data
+            };
+            
+            fetch(webhook.url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Webhook-Event': event,
+                    ...(webhook.secret ? { 'X-Webhook-Secret': webhook.secret } : {})
+                },
+                body: JSON.stringify(payload)
+            }).catch(() => {});
+        } catch {}
+    }
 }
 
 // =====================
@@ -207,8 +244,10 @@ app.post('/api/login', (req, res) => {
     const user = db.findUser(username);
     if (user && bcrypt.compareSync(password, user.password)) {
         if (user.suspended) {
+            audit(user.id, username, 'login_failed_suspended');
             return res.status(403).json({ error: 'Account suspended: ' + (user.suspendReason || 'Contact administrator') });
         }
+        audit(user.id, username, 'login');
         const token = generateToken(user);
         res.json({ success: true, user: { id: user.id, username: user.username, role: user.role }, token });
     } else {
@@ -219,23 +258,45 @@ app.post('/api/login', (req, res) => {
 app.post('/api/register', (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
+    if (username.length < 3 || username.length > 32) {
+        return res.status(400).json({ error: 'Username must be 3-32 characters' });
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+        return res.status(400).json({ error: 'Username can only contain letters, numbers, _ and -' });
+    }
+    if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
     if (db.findUser(username)) {
         return res.status(400).json({ error: 'Username taken' });
     }
     const hashedPassword = bcrypt.hashSync(password, 10);
     const isFirstUser = db.getUsers().length === 0;
-    const user = {
+    
+    let user = {
         id: Date.now().toString(),
         username,
         password: hashedPassword,
-        role: isFirstUser ? 'admin' : 'user',
+        role: 'user',
         created_at: new Date()
     };
-    db.createUser(user);
+    
+    if (isFirstUser) {
+        const created = db.createFirstAdmin(user);
+        if (created) {
+            user = created;
+        } else {
+            db.createUser(user);
+        }
+    } else {
+        db.createUser(user);
+    }
+    
     fs.ensureDirSync(path.join(DATA_DIR, 'users', user.id));
+    audit(user.id, user.username, 'register', { role: user.role });
     
     const token = generateToken(user);
-    res.json({ success: true, user: { id: user.id, username: user.username }, token });
+    res.json({ success: true, user: { id: user.id, username: user.username, role: user.role }, token });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -268,7 +329,9 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     const servers = db.getUserServers(user.id);
     const userLimits = getUserLimits(user);
     
-    const totalRam = servers.reduce((acc, s) => acc + (s.ram || 1024), 0);
+    const totalRam = servers.reduce((acc, s) => acc + (s.ram || 0), 0);
+    const totalCpu = servers.reduce((acc, s) => acc + (s.cpuLimit || 0), 0);
+    const totalDisk = servers.reduce((acc, s) => acc + parseInt((s.diskSize || '0G').replace('G', '')), 0);
     
     const serversWithStatus = servers.map(s => ({
         ...s,
@@ -280,15 +343,17 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
         servers: serversWithStatus,
         stats: {
             totalRam,
+            totalCpu,
+            totalDisk,
+            availableRam: Math.max(0, userLimits.maxRam - totalRam),
+            availableCpu: Math.max(0, userLimits.maxCpu - totalCpu),
+            availableDisk: Math.max(0, userLimits.maxDisk - totalDisk),
             slotsUsed: servers.length,
             slotsMax: userLimits.maxServers,
             maxRam: userLimits.maxRam,
             maxDisk: userLimits.maxDisk,
             maxCpu: userLimits.maxCpu,
-            maxIo: userLimits.maxIo,
-            minRam: userLimits.minRam,
-            minDisk: userLimits.minDisk,
-            minCpu: userLimits.minCpu
+            maxIo: userLimits.maxIo
         },
         defaults: {
             ram: config.vm?.defaultRam || 1024,
@@ -309,6 +374,14 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
         const image = getImage(imageId || config.vm?.defaultImage || 'fedora-40');
         if (!image) return res.status(400).json({ error: 'Invalid image' });
         
+        const totalRam = servers.reduce((acc, s) => acc + (s.ram || 0), 0);
+        const totalCpu = servers.reduce((acc, s) => acc + (s.cpuLimit || 0), 0);
+        const totalDisk = servers.reduce((acc, s) => acc + parseInt((s.diskSize || '0G').replace('G', '')), 0);
+        
+        const availableRam = userLimits.maxRam - totalRam;
+        const availableCpu = userLimits.maxCpu - totalCpu;
+        const availableDisk = userLimits.maxDisk - totalDisk;
+        
         if (req.user.role !== 'admin') {
             if (servers.length >= userLimits.maxServers) {
                 return res.status(400).json({ error: `Max ${userLimits.maxServers} servers reached` });
@@ -323,10 +396,16 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
         if (isNaN(diskSizeNum)) diskSizeNum = 10;
         
         if (req.user.role !== 'admin') {
-            ram = Math.max(userLimits.minRam, Math.min(ram, userLimits.maxRam));
-            cpuLimit = Math.max(userLimits.minCpu, Math.min(cpuLimit, userLimits.maxCpu));
+            if (ram > availableRam) {
+                return res.status(400).json({ error: `Not enough RAM. Available: ${availableRam}MB` });
+            }
+            if (cpuLimit > availableCpu) {
+                return res.status(400).json({ error: `Not enough CPU. Available: ${availableCpu}%` });
+            }
+            if (diskSizeNum > availableDisk) {
+                return res.status(400).json({ error: `Not enough storage. Available: ${availableDisk}GB` });
+            }
             ioLimit = Math.min(ioLimit, userLimits.maxIo);
-            diskSizeNum = Math.max(userLimits.minDisk, Math.min(diskSizeNum, userLimits.maxDisk));
         }
         
         const diskSize = `${diskSizeNum}G`;
@@ -348,6 +427,8 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
         
         db.addServer(serverData);
         log(`Server ${serverId} creation started for user ${user.username}`);
+        audit(user.id, user.username, 'vm_create', { serverId, serverName: serverData.name, imageId: image.id });
+        triggerWebhooks('vm_create', { serverId, serverName: serverData.name, userId: user.id, imageId: image.id });
         
         sandboxManager.createServer(user.id, serverId, {
             imageId: image.id,
@@ -437,6 +518,8 @@ app.post('/api/server/:id/start', requireAuth, async (req, res, next) => {
         
         db.updateServer(serverId, { status: 'running' });
         io.to(`server:${serverId}`).emit('vm-status', 'started');
+        audit(req.user.id, req.user.username, 'vm_start', { serverId, serverName: serverData.name });
+        triggerWebhooks('vm_start', { serverId, serverName: serverData.name, userId: req.user.id });
         res.json({ status: 'started' });
         
     } catch (err) {
@@ -456,6 +539,8 @@ app.post('/api/server/:id/stop', requireAuth, async (req, res, next) => {
         sandboxManager.stopServer(serverId);
         
         db.updateServer(serverId, { status: 'stopped' });
+        audit(req.user.id, req.user.username, 'vm_stop', { serverId, serverName: serverData.name });
+        triggerWebhooks('vm_stop', { serverId, serverName: serverData.name, userId: req.user.id });
         res.json({ status: 'stopped' });
         
     } catch (err) {
@@ -477,6 +562,8 @@ app.delete('/api/server/:id', requireAuth, async (req, res, next) => {
         await sandboxManager.deleteServer(serverData.ownerId, serverId);
         
         db.deleteServer(serverId);
+        audit(req.user.id, req.user.username, 'vm_delete', { serverId, serverName: serverData.name });
+        triggerWebhooks('vm_delete', { serverId, serverName: serverData.name, userId: req.user.id });
         res.json({ success: true });
         
     } catch (err) {
@@ -952,6 +1039,722 @@ app.delete('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
     } catch (err) {
         next(err);
     }
+});
+
+// =====================
+// AUDIT LOG
+// =====================
+
+app.get('/api/admin/audit', requireAdmin, (req, res) => {
+    const { userId, action, serverId, limit, offset } = req.query;
+    const logs = db.getAuditLogs({
+        userId,
+        action,
+        serverId,
+        limit: parseInt(limit) || 50,
+        offset: parseInt(offset) || 0
+    });
+    res.json(logs);
+});
+
+app.get('/api/activity', requireAuth, (req, res) => {
+    const { limit, offset } = req.query;
+    const logs = db.getAuditLogs({
+        userId: req.user.id,
+        limit: parseInt(limit) || 20,
+        offset: parseInt(offset) || 0
+    });
+    res.json(logs);
+});
+
+// =====================
+// API KEYS
+// =====================
+
+function generateApiKey() {
+    return 'v87_' + crypto.randomBytes(32).toString('hex');
+}
+
+app.get('/api/keys', requireAuth, (req, res) => {
+    const keys = db.getApiKeys(req.user.id).map(k => ({
+        id: k.id,
+        name: k.name,
+        prefix: k.key.substring(0, 8) + '...',
+        createdAt: k.createdAt,
+        lastUsed: k.lastUsed,
+        permissions: k.permissions
+    }));
+    res.json({ keys });
+});
+
+app.post('/api/keys', requireAuth, (req, res) => {
+    const { name, permissions } = req.body;
+    
+    const userKeys = db.getApiKeys(req.user.id);
+    if (userKeys.length >= 5) {
+        return res.status(400).json({ error: 'Maximum 5 API keys allowed' });
+    }
+    
+    const key = generateApiKey();
+    const apiKey = {
+        id: Date.now().toString(),
+        userId: req.user.id,
+        name: name || 'API Key',
+        key,
+        permissions: permissions || ['read'],
+        createdAt: new Date().toISOString(),
+        lastUsed: null
+    };
+    
+    db.createApiKey(apiKey);
+    audit(req.user.id, req.user.username, 'api_key_created', { keyName: name });
+    
+    res.json({ success: true, key, id: apiKey.id });
+});
+
+app.delete('/api/keys/:id', requireAuth, (req, res) => {
+    db.deleteApiKey(req.params.id, req.user.id);
+    audit(req.user.id, req.user.username, 'api_key_deleted', { keyId: req.params.id });
+    res.json({ success: true });
+});
+
+// API Key authentication middleware
+app.use('/api/v1', (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) {
+        return res.status(401).json({ error: 'API key required' });
+    }
+    
+    const keyData = db.getApiKeyByKey(apiKey);
+    if (!keyData) {
+        return res.status(401).json({ error: 'Invalid API key' });
+    }
+    
+    const user = db.findUserById(keyData.userId);
+    if (!user || user.suspended) {
+        return res.status(403).json({ error: 'Account suspended' });
+    }
+    
+    db.updateApiKeyLastUsed(keyData.id);
+    req.user = user;
+    req.apiKey = keyData;
+    next();
+});
+
+// API v1 endpoints (for programmatic access)
+app.get('/api/v1/servers', (req, res) => {
+    const servers = db.getUserServers(req.user.id).map(s => ({
+        id: s.id,
+        name: s.name,
+        status: sandboxManager.getServerStatus(s.id),
+        ram: s.ram,
+        diskSize: s.diskSize
+    }));
+    res.json({ servers });
+});
+
+app.post('/api/v1/servers/:id/start', async (req, res) => {
+    if (!req.apiKey.permissions.includes('write')) {
+        return res.status(403).json({ error: 'Write permission required' });
+    }
+    
+    const server = db.getServer(req.params.id);
+    if (!server || server.ownerId !== req.user.id) {
+        return res.status(404).json({ error: 'Server not found' });
+    }
+    
+    try {
+        await sandboxManager.startServer(server.ownerId, server.id);
+        db.updateServer(server.id, { status: 'running' });
+        audit(req.user.id, req.user.username, 'vm_started_api', { serverId: server.id });
+        res.json({ success: true, status: 'running' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/v1/servers/:id/stop', (req, res) => {
+    if (!req.apiKey.permissions.includes('write')) {
+        return res.status(403).json({ error: 'Write permission required' });
+    }
+    
+    const server = db.getServer(req.params.id);
+    if (!server || server.ownerId !== req.user.id) {
+        return res.status(404).json({ error: 'Server not found' });
+    }
+    
+    sandboxManager.stopServer(server.id);
+    db.updateServer(server.id, { status: 'stopped' });
+    audit(req.user.id, req.user.username, 'vm_stopped_api', { serverId: server.id });
+    res.json({ success: true, status: 'stopped' });
+});
+
+app.get('/api/v1/servers/:id/stats', async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server || server.ownerId !== req.user.id) {
+        return res.status(404).json({ error: 'Server not found' });
+    }
+    
+    const stats = await sandboxManager.getServerStats(server.id);
+    res.json(stats || { running: false });
+});
+
+// =====================
+// SCHEDULED ACTIONS
+// =====================
+
+app.get('/api/server/:id/schedules', requireAuth, (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const schedules = db.getServerSchedules(req.params.id);
+    res.json({ schedules });
+});
+
+app.post('/api/server/:id/schedules', requireAuth, (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const { action, cronExpression, enabled } = req.body;
+    
+    if (!['start', 'stop', 'restart'].includes(action)) {
+        return res.status(400).json({ error: 'Invalid action' });
+    }
+    
+    const userSchedules = db.getUserSchedules(req.user.id);
+    if (userSchedules.length >= 10) {
+        return res.status(400).json({ error: 'Maximum 10 schedules allowed' });
+    }
+    
+    const schedule = {
+        id: Date.now().toString(),
+        userId: req.user.id,
+        serverId: req.params.id,
+        action,
+        cronExpression: cronExpression || '0 0 * * *',
+        enabled: enabled !== false,
+        createdAt: new Date().toISOString(),
+        lastRun: null
+    };
+    
+    db.addSchedule(schedule);
+    audit(req.user.id, req.user.username, 'schedule_created', { serverId: server.id, action });
+    res.json({ success: true, schedule });
+});
+
+app.delete('/api/server/:id/schedules/:scheduleId', requireAuth, (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    db.deleteSchedule(req.params.scheduleId);
+    res.json({ success: true });
+});
+
+// Schedule processor (runs every minute)
+setInterval(() => {
+    const now = new Date();
+    const schedules = db.getSchedules().filter(s => s.enabled);
+    
+    for (const schedule of schedules) {
+        try {
+            const [minute, hour, dayOfMonth, month, dayOfWeek] = schedule.cronExpression.split(' ');
+            
+            const matches = (
+                (minute === '*' || parseInt(minute) === now.getMinutes()) &&
+                (hour === '*' || parseInt(hour) === now.getHours()) &&
+                (dayOfMonth === '*' || parseInt(dayOfMonth) === now.getDate()) &&
+                (month === '*' || parseInt(month) === now.getMonth() + 1) &&
+                (dayOfWeek === '*' || parseInt(dayOfWeek) === now.getDay())
+            );
+            
+            if (matches) {
+                const server = db.getServer(schedule.serverId);
+                if (!server) continue;
+                
+                if (schedule.action === 'start') {
+                    sandboxManager.startServer(server.ownerId, server.id).catch(() => {});
+                    db.updateServer(server.id, { status: 'running' });
+                } else if (schedule.action === 'stop') {
+                    sandboxManager.stopServer(server.id);
+                    db.updateServer(server.id, { status: 'stopped' });
+                } else if (schedule.action === 'restart') {
+                    sandboxManager.stopServer(server.id);
+                    setTimeout(() => {
+                        sandboxManager.startServer(server.ownerId, server.id).catch(() => {});
+                        db.updateServer(server.id, { status: 'running' });
+                    }, 5000);
+                }
+                
+                db.updateSchedule(schedule.id, { lastRun: new Date().toISOString() });
+                audit(schedule.userId, 'system', 'schedule_executed', { 
+                    serverId: server.id, 
+                    action: schedule.action 
+                });
+            }
+        } catch (err) {}
+    }
+}, 60000);
+
+// =====================
+// SNAPSHOTS
+// =====================
+
+app.get('/api/server/:id/snapshots', requireAuth, async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const snapshots = await sandboxManager.listSnapshots(server.ownerId, server.id);
+    res.json({ snapshots });
+});
+
+app.post('/api/server/:id/snapshots', requireAuth, async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const snapshots = await sandboxManager.listSnapshots(server.ownerId, server.id);
+    if (snapshots.length >= 5) {
+        return res.status(400).json({ error: 'Maximum 5 snapshots per VM' });
+    }
+    
+    try {
+        const { name } = req.body;
+        const snapshot = await sandboxManager.createSnapshot(server.ownerId, server.id, name);
+        audit(req.user.id, req.user.username, 'snapshot_create', { serverId: server.id, snapshotId: snapshot.id });
+        res.json({ success: true, snapshot });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/server/:id/snapshots/:snapshotId/restore', requireAuth, async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    try {
+        const result = await sandboxManager.restoreSnapshot(server.ownerId, server.id, req.params.snapshotId);
+        audit(req.user.id, req.user.username, 'snapshot_restore', { serverId: server.id, snapshotId: req.params.snapshotId });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.delete('/api/server/:id/snapshots/:snapshotId', requireAuth, async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    await sandboxManager.deleteSnapshot(server.ownerId, server.id, req.params.snapshotId);
+    audit(req.user.id, req.user.username, 'snapshot_delete', { serverId: server.id, snapshotId: req.params.snapshotId });
+    res.json({ success: true });
+});
+
+// =====================
+// VM NOTES & TAGS
+// =====================
+
+app.post('/api/server/:id/notes', requireAuth, async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const { notes } = req.body;
+    if (typeof notes !== 'string' || notes.length > 2000) {
+        return res.status(400).json({ error: 'Notes must be a string under 2000 characters' });
+    }
+    
+    db.updateServer(req.params.id, { notes });
+    res.json({ success: true });
+});
+
+app.post('/api/server/:id/tags', requireAuth, async (req, res) => {
+    const server = db.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Server not found' });
+    if (server.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const { tags } = req.body;
+    if (!Array.isArray(tags) || tags.length > 10) {
+        return res.status(400).json({ error: 'Tags must be an array with max 10 items' });
+    }
+    
+    const cleanTags = tags
+        .filter(t => typeof t === 'string')
+        .map(t => t.toLowerCase().trim().slice(0, 20))
+        .filter(t => t.length > 0);
+    
+    db.updateServer(req.params.id, { tags: cleanTags });
+    res.json({ success: true, tags: cleanTags });
+});
+
+// =====================
+// USER PREFERENCES
+// =====================
+
+app.get('/api/preferences', requireAuth, (req, res) => {
+    const user = db.findUserById(req.user.id);
+    res.json({ preferences: user.preferences || {} });
+});
+
+app.post('/api/preferences', requireAuth, (req, res) => {
+    const { theme, terminalFontSize, defaultView, notifications } = req.body;
+    
+    const preferences = {};
+    if (theme && ['dark', 'light', 'auto'].includes(theme)) {
+        preferences.theme = theme;
+    }
+    if (terminalFontSize && terminalFontSize >= 10 && terminalFontSize <= 24) {
+        preferences.terminalFontSize = terminalFontSize;
+    }
+    if (defaultView && ['console', 'stats', 'settings'].includes(defaultView)) {
+        preferences.defaultView = defaultView;
+    }
+    if (typeof notifications === 'boolean') {
+        preferences.notifications = notifications;
+    }
+    
+    const user = db.findUserById(req.user.id);
+    const updatedPrefs = { ...(user.preferences || {}), ...preferences };
+    
+    db.updateUser(req.user.id, { preferences: updatedPrefs });
+    res.json({ success: true, preferences: updatedPrefs });
+});
+
+// =====================
+// WEBHOOKS
+// =====================
+
+app.get('/api/webhooks', requireAuth, (req, res) => {
+    const webhooks = db.getWebhooks(req.user.id).map(w => ({
+        ...w,
+        secret: w.secret ? '••••••••' : null
+    }));
+    res.json({ webhooks, availableEvents: WEBHOOK_EVENTS });
+});
+
+app.post('/api/webhooks', requireAuth, (req, res) => {
+    const { name, url, events, secret } = req.body;
+    
+    if (!url || !url.startsWith('http')) {
+        return res.status(400).json({ error: 'Invalid URL' });
+    }
+    
+    const userWebhooks = db.getWebhooks(req.user.id);
+    if (userWebhooks.length >= 5) {
+        return res.status(400).json({ error: 'Maximum 5 webhooks allowed' });
+    }
+    
+    const validEvents = (events || []).filter(e => WEBHOOK_EVENTS.includes(e));
+    if (validEvents.length === 0) {
+        return res.status(400).json({ error: 'At least one valid event required' });
+    }
+    
+    const webhook = {
+        id: Date.now().toString(),
+        userId: req.user.id,
+        name: name || 'Webhook',
+        url,
+        events: validEvents,
+        secret: secret || null,
+        enabled: true,
+        createdAt: new Date().toISOString()
+    };
+    
+    db.createWebhook(webhook);
+    audit(req.user.id, req.user.username, 'webhook_created', { webhookId: webhook.id });
+    res.json({ success: true, webhook: { ...webhook, secret: webhook.secret ? '••••••••' : null } });
+});
+
+app.put('/api/webhooks/:id', requireAuth, (req, res) => {
+    const { name, url, events, secret, enabled } = req.body;
+    
+    const updates = {};
+    if (name) updates.name = name;
+    if (url && url.startsWith('http')) updates.url = url;
+    if (events) updates.events = events.filter(e => WEBHOOK_EVENTS.includes(e));
+    if (secret !== undefined) updates.secret = secret || null;
+    if (typeof enabled === 'boolean') updates.enabled = enabled;
+    
+    const updated = db.updateWebhook(req.params.id, req.user.id, updates);
+    if (!updated) {
+        return res.status(404).json({ error: 'Webhook not found' });
+    }
+    
+    res.json({ success: true, webhook: { ...updated, secret: updated.secret ? '••••••••' : null } });
+});
+
+app.delete('/api/webhooks/:id', requireAuth, (req, res) => {
+    db.deleteWebhook(req.params.id, req.user.id);
+    res.json({ success: true });
+});
+
+// =====================
+// ALERTS
+// =====================
+
+app.get('/api/alerts', requireAuth, (req, res) => {
+    const alerts = db.getAlerts(req.user.id);
+    res.json({ alerts });
+});
+
+app.post('/api/alerts', requireAuth, (req, res) => {
+    const { serverId, metric, threshold, comparison, action } = req.body;
+    
+    const server = db.getServer(serverId);
+    if (!server || (server.ownerId !== req.user.id && req.user.role !== 'admin')) {
+        return res.status(404).json({ error: 'Server not found' });
+    }
+    
+    if (!['cpu', 'memory'].includes(metric)) {
+        return res.status(400).json({ error: 'Invalid metric. Use: cpu, memory' });
+    }
+    
+    if (!['above', 'below'].includes(comparison)) {
+        return res.status(400).json({ error: 'Invalid comparison. Use: above, below' });
+    }
+    
+    const userAlerts = db.getAlerts(req.user.id);
+    if (userAlerts.length >= 10) {
+        return res.status(400).json({ error: 'Maximum 10 alerts allowed' });
+    }
+    
+    const alert = {
+        id: Date.now().toString(),
+        userId: req.user.id,
+        serverId,
+        serverName: server.name,
+        metric,
+        threshold: parseFloat(threshold) || 80,
+        comparison,
+        action: action || 'notify',
+        enabled: true,
+        triggered: false,
+        lastTriggered: null,
+        createdAt: new Date().toISOString()
+    };
+    
+    db.createAlert(alert);
+    audit(req.user.id, req.user.username, 'alert_created', { alertId: alert.id, serverId });
+    res.json({ success: true, alert });
+});
+
+app.put('/api/alerts/:id', requireAuth, (req, res) => {
+    const { threshold, enabled } = req.body;
+    
+    const alerts = db.getAlerts(req.user.id);
+    const alert = alerts.find(a => a.id === req.params.id);
+    if (!alert) {
+        return res.status(404).json({ error: 'Alert not found' });
+    }
+    
+    const updates = {};
+    if (threshold !== undefined) updates.threshold = parseFloat(threshold);
+    if (typeof enabled === 'boolean') updates.enabled = enabled;
+    
+    const updated = db.updateAlert(req.params.id, updates);
+    res.json({ success: true, alert: updated });
+});
+
+app.delete('/api/alerts/:id', requireAuth, (req, res) => {
+    db.deleteAlert(req.params.id);
+    res.json({ success: true });
+});
+
+// Alert checker (runs every 30 seconds)
+setInterval(async () => {
+    const servers = db.getServers();
+    
+    for (const server of servers) {
+        const alerts = db.getServerAlerts(server.id);
+        if (alerts.length === 0) continue;
+        
+        const stats = await sandboxManager.getServerStats(server.id);
+        if (!stats) continue;
+        
+        for (const alert of alerts) {
+            let value = 0;
+            if (alert.metric === 'cpu') {
+                value = stats.cpuUsage || 0;
+            } else if (alert.metric === 'memory' && stats.memory) {
+                value = (stats.memory.actual / stats.memory.configured) * 100;
+            }
+            
+            const shouldTrigger = alert.comparison === 'above' 
+                ? value > alert.threshold 
+                : value < alert.threshold;
+            
+            if (shouldTrigger && !alert.triggered) {
+                db.updateAlert(alert.id, { triggered: true, lastTriggered: new Date().toISOString() });
+                
+                triggerWebhooks('alert_triggered', {
+                    alertId: alert.id,
+                    serverId: server.id,
+                    serverName: server.name,
+                    metric: alert.metric,
+                    value,
+                    threshold: alert.threshold
+                });
+                
+                audit(alert.userId, 'system', 'alert_triggered', {
+                    alertId: alert.id,
+                    serverId: server.id,
+                    metric: alert.metric,
+                    value
+                });
+                
+                if (alert.action === 'stop') {
+                    sandboxManager.stopServer(server.id);
+                    db.updateServer(server.id, { status: 'stopped' });
+                }
+            } else if (!shouldTrigger && alert.triggered) {
+                db.updateAlert(alert.id, { triggered: false });
+            }
+        }
+    }
+}, 30000);
+
+// =====================
+// TRANSFER VM (Admin)
+// =====================
+
+app.post('/api/admin/server/:id/transfer', requireAdmin, async (req, res) => {
+    const { newOwnerId } = req.body;
+    
+    const server = db.getServer(req.params.id);
+    if (!server) {
+        return res.status(404).json({ error: 'Server not found' });
+    }
+    
+    const newOwner = db.findUserById(newOwnerId);
+    if (!newOwner) {
+        return res.status(404).json({ error: 'New owner not found' });
+    }
+    
+    if (sandboxManager.getServerStatus(server.id) === 'running') {
+        return res.status(400).json({ error: 'Stop the VM before transferring' });
+    }
+    
+    const oldOwnerId = server.ownerId;
+    const oldOwner = db.findUserById(oldOwnerId);
+    
+    // Move files
+    const oldPath = path.join(DATA_DIR, 'users', oldOwnerId, server.id);
+    const newPath = path.join(DATA_DIR, 'users', newOwnerId, server.id);
+    
+    try {
+        await fs.ensureDir(path.join(DATA_DIR, 'users', newOwnerId));
+        await fs.move(oldPath, newPath);
+    } catch (err) {
+        return res.status(500).json({ error: 'Failed to move VM files: ' + err.message });
+    }
+    
+    db.updateServer(server.id, { ownerId: newOwnerId });
+    
+    audit(req.user.id, req.user.username, 'vm_transfer', {
+        serverId: server.id,
+        serverName: server.name,
+        fromUser: oldOwner?.username,
+        toUser: newOwner.username
+    });
+    
+    res.json({ 
+        success: true, 
+        message: `VM transferred from ${oldOwner?.username} to ${newOwner.username}` 
+    });
+});
+
+// =====================
+// MAINTENANCE MODE
+// =====================
+
+app.get('/api/admin/maintenance', requireAdmin, (req, res) => {
+    const settings = db.getSettings();
+    res.json({ 
+        maintenance: settings.maintenance || false,
+        message: settings.maintenanceMessage || 'System is under maintenance'
+    });
+});
+
+app.post('/api/admin/maintenance', requireAdmin, (req, res) => {
+    const { enabled, message, stopAllVms } = req.body;
+    
+    const updates = {
+        maintenance: !!enabled,
+        maintenanceMessage: message || 'System is under maintenance',
+        maintenanceStarted: enabled ? new Date().toISOString() : null
+    };
+    
+    db.updateSettings(updates);
+    
+    if (enabled && stopAllVms) {
+        const running = sandboxManager.getRunningServers();
+        for (const s of running) {
+            sandboxManager.stopServer(s.serverId);
+            db.updateServer(s.serverId, { status: 'stopped' });
+        }
+        log(`Maintenance mode: stopped ${running.length} VMs`);
+    }
+    
+    audit(req.user.id, req.user.username, enabled ? 'maintenance_enabled' : 'maintenance_disabled');
+    log(`Maintenance mode ${enabled ? 'ENABLED' : 'DISABLED'} by ${req.user.username}`);
+    
+    res.json({ success: true, ...updates });
+});
+
+// Maintenance mode middleware
+app.use('/api', (req, res, next) => {
+    // Skip for admin and auth routes
+    if (req.path.startsWith('/api/admin') || 
+        req.path === '/api/login' || 
+        req.path === '/api/me' ||
+        req.path === '/api/maintenance-status') {
+        return next();
+    }
+    
+    const settings = db.getSettings();
+    if (settings.maintenance) {
+        // Allow admins through
+        if (req.user && req.user.role === 'admin') {
+            return next();
+        }
+        return res.status(503).json({ 
+            error: 'maintenance',
+            message: settings.maintenanceMessage || 'System is under maintenance'
+        });
+    }
+    next();
+});
+
+// Public maintenance status endpoint
+app.get('/api/maintenance-status', (req, res) => {
+    const settings = db.getSettings();
+    res.json({ 
+        maintenance: settings.maintenance || false,
+        message: settings.maintenance ? (settings.maintenanceMessage || 'System is under maintenance') : null
+    });
 });
 
 // =====================

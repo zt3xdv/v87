@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
+import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import https from 'node:https';
@@ -13,6 +14,25 @@ import { getImage } from './images.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = path.join(__dirname, '../../data/users');
 const CACHE_PATH = path.join(__dirname, '../../data/images');
+
+const ID_REGEX = /^[A-Za-z0-9_-]+$/;
+
+function validateId(id) {
+    return typeof id === 'string' && ID_REGEX.test(id) && id.length > 0 && id.length <= 64;
+}
+
+function safeJoin(base, ...segments) {
+    for (const seg of segments) {
+        if (!validateId(seg)) {
+            throw new Error('Invalid path segment');
+        }
+    }
+    const full = path.resolve(base, ...segments);
+    if (!full.startsWith(path.resolve(base) + path.sep)) {
+        throw new Error('Path traversal detected');
+    }
+    return full;
+}
 
 export class SandboxManager extends EventEmitter {
     constructor(options = {}) {
@@ -115,7 +135,7 @@ export class SandboxManager extends EventEmitter {
     }
 
     getServerPath(userId, serverId) {
-        return path.join(DATA_PATH, userId, serverId);
+        return safeJoin(DATA_PATH, userId, serverId);
     }
 
     getDiskPath(userId, serverId) {
@@ -127,14 +147,18 @@ export class SandboxManager extends EventEmitter {
     }
 
     getCachedImagePath(imageId) {
+        if (!validateId(imageId)) {
+            throw new Error('Invalid image ID');
+        }
         return path.join(CACHE_PATH, `${imageId}.qcow2`);
     }
 
     generatePassword(length = 12) {
         const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        const bytes = crypto.randomBytes(length);
         let password = '';
         for (let i = 0; i < length; i++) {
-            password += chars.charAt(Math.floor(Math.random() * chars.length));
+            password += chars[bytes[i] % chars.length];
         }
         return password;
     }
@@ -828,5 +852,103 @@ local-hostname: v87-vm
         for (const serverId of this.processes.keys()) {
             this.stopServer(serverId);
         }
+    }
+
+    async createSnapshot(userId, serverId, snapshotName) {
+        const diskPath = this.getDiskPath(userId, serverId);
+        const snapshotsDir = path.join(this.getServerPath(userId, serverId), 'snapshots');
+        await fs.mkdir(snapshotsDir, { recursive: true });
+        
+        const snapshotId = Date.now().toString();
+        const snapshotFile = path.join(snapshotsDir, `${snapshotId}.qcow2`);
+        
+        await this.execCommand('qemu-img', [
+            'create', '-f', 'qcow2',
+            '-b', diskPath, '-F', 'qcow2',
+            snapshotFile
+        ]);
+        
+        const metaFile = path.join(snapshotsDir, `${snapshotId}.json`);
+        await fs.writeFile(metaFile, JSON.stringify({
+            id: snapshotId,
+            name: snapshotName || `Snapshot ${new Date().toLocaleString()}`,
+            createdAt: new Date().toISOString(),
+            parentDisk: diskPath
+        }, null, 2));
+        
+        return { id: snapshotId, name: snapshotName };
+    }
+
+    async listSnapshots(userId, serverId) {
+        const snapshotsDir = path.join(this.getServerPath(userId, serverId), 'snapshots');
+        
+        try {
+            const files = await fs.readdir(snapshotsDir);
+            const snapshots = [];
+            
+            for (const file of files) {
+                if (file.endsWith('.json')) {
+                    const data = JSON.parse(await fs.readFile(path.join(snapshotsDir, file), 'utf-8'));
+                    const qcowFile = path.join(snapshotsDir, `${data.id}.qcow2`);
+                    try {
+                        const stat = await fs.stat(qcowFile);
+                        data.size = stat.size;
+                    } catch {}
+                    snapshots.push(data);
+                }
+            }
+            
+            return snapshots.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        } catch {
+            return [];
+        }
+    }
+
+    async restoreSnapshot(userId, serverId, snapshotId) {
+        if (this.processes.has(serverId)) {
+            throw new Error('Stop the VM before restoring a snapshot');
+        }
+        
+        const snapshotsDir = path.join(this.getServerPath(userId, serverId), 'snapshots');
+        const snapshotFile = path.join(snapshotsDir, `${snapshotId}.qcow2`);
+        const diskPath = this.getDiskPath(userId, serverId);
+        const backupPath = diskPath + '.backup';
+        
+        try {
+            await fs.access(snapshotFile);
+        } catch {
+            throw new Error('Snapshot not found');
+        }
+        
+        await fs.rename(diskPath, backupPath);
+        
+        try {
+            await this.execCommand('qemu-img', [
+                'create', '-f', 'qcow2',
+                '-b', snapshotFile, '-F', 'qcow2',
+                diskPath
+            ]);
+            await fs.unlink(backupPath);
+        } catch (err) {
+            await fs.rename(backupPath, diskPath);
+            throw err;
+        }
+        
+        return { restored: true, snapshotId };
+    }
+
+    async deleteSnapshot(userId, serverId, snapshotId) {
+        const snapshotsDir = path.join(this.getServerPath(userId, serverId), 'snapshots');
+        const snapshotFile = path.join(snapshotsDir, `${snapshotId}.qcow2`);
+        const metaFile = path.join(snapshotsDir, `${snapshotId}.json`);
+        
+        try {
+            await fs.unlink(snapshotFile);
+        } catch {}
+        try {
+            await fs.unlink(metaFile);
+        } catch {}
+        
+        return { deleted: true };
     }
 }
