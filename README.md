@@ -86,7 +86,7 @@ Edit `config.json`:
 Images are downloaded automatically via virt-builder:
 
 - **Fedora**: fedora-40, fedora-39
-- **Debian**: debian-12, debian-11
+- **Debian**: debian-12, debian-11, debian-13
 - **Ubuntu**: ubuntu-24.04, ubuntu-22.04
 - **CentOS**: centos-stream-9
 - **Rocky Linux**: rocky-9
