@@ -45,7 +45,7 @@ try {
 }
 
 if (config.secretKey === 'v87-change-me-in-prod') {
-    log('\x1b[33m⚠️  WARNING: Using default secretKey! Change it in config.json for production.\x1b[0m');
+    log('\x1b[33mWARNING: Using default secretKey! Change it in config.json for production.\x1b[0m');
 }
 
 const sandboxManager = new SandboxManager({
@@ -931,6 +931,4 @@ process.on('SIGINT', () => {
 
 server.listen(PORT, () => {
     log(`V87 Panel running on port ${PORT}`);
-    log(`VM mode: QEMU + virt-builder`);
-    log(`Available images: ${getImages().map(i => i.id).join(', ')}`);
 });

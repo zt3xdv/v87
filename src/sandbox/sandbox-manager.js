@@ -533,15 +533,13 @@ local-hostname: v87-vm
 
         proc.stdout.on('data', async (data) => {
             const text = data.toString();
-            const timestamp = new Date().toISOString();
-            await logHandle.write(`[${timestamp}] ${text}`);
+            await logHandle.write(text);
             this.emit('log', serverId, text);
         });
 
         proc.stderr.on('data', async (data) => {
             const text = data.toString();
-            const timestamp = new Date().toISOString();
-            await logHandle.write(`[${timestamp}] [ERR] ${text}`);
+            await logHandle.write(text);
             this.emit('log', serverId, text);
         });
 
