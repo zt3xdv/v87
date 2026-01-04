@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import https from 'node:https';
@@ -25,6 +26,92 @@ export class SandboxManager extends EventEmitter {
             qemuPath: options.qemuPath || 'qemu-system-x86_64',
             enableKvm: options.enableKvm === true
         };
+    }
+    
+    generateQemuCpuArgs(cpuLimit) {
+        const rawValue = parseFloat(cpuLimit.toString().replace('%', ''));
+
+        if (isNaN(rawValue) || rawValue <= 0) {
+            return ['-smp', '1,sockets=1,cores=1,threads=1'];
+        }
+
+        let cores = Math.ceil(rawValue / 100);
+        if (cores < 1) cores = 1;
+
+        const topology = `${cores},sockets=1,cores=${cores},threads=1`;
+        const args = ['-smp', topology];
+
+        const throttlePercent = rawValue % 100;
+        if (throttlePercent > 0 && throttlePercent < 100) {
+            const period = 100000;
+            const quota = Math.floor(period * (throttlePercent / 100));
+            args.push('-cpu', `max,throttle-period=${period},throttle-quota=${quota}`);
+        }
+
+        return args;
+    }
+
+    async updateServerLimits(userId, serverId, limits = {}) {
+        const serverPath = this.getServerPath(userId, serverId);
+        const metadataPath = path.join(serverPath, 'metadata.json');
+        
+        let metadata = {};
+        try {
+            const data = await fs.readFile(metadataPath, 'utf-8');
+            metadata = JSON.parse(data);
+        } catch {
+            throw new Error('Server metadata not found');
+        }
+
+        if (limits.ram !== undefined) {
+            metadata.ram = Math.max(128, Math.min(limits.ram, 65536));
+        }
+        if (limits.cpuLimit !== undefined) {
+            metadata.cpuLimit = Math.max(10, Math.min(limits.cpuLimit, 1600));
+        }
+        if (limits.ioLimit !== undefined) {
+            metadata.ioLimit = Math.max(0, limits.ioLimit);
+        }
+        if (limits.cpuCores !== undefined) {
+            metadata.cpuCores = Math.max(1, Math.min(limits.cpuCores, 16));
+        }
+
+        await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        
+        return {
+            serverId,
+            updated: true,
+            limits: {
+                ram: metadata.ram,
+                cpuLimit: metadata.cpuLimit,
+                cpuCores: metadata.cpuCores,
+                ioLimit: metadata.ioLimit
+            },
+            requiresRestart: this.processes.has(serverId)
+        };
+    }
+
+    async getServerLimits(userId, serverId) {
+        const serverPath = this.getServerPath(userId, serverId);
+        const metadataPath = path.join(serverPath, 'metadata.json');
+        
+        try {
+            const data = await fs.readFile(metadataPath, 'utf-8');
+            const metadata = JSON.parse(data);
+            return {
+                ram: metadata.ram || this.options.maxMemoryMB,
+                cpuLimit: metadata.cpuLimit || 100,
+                cpuCores: metadata.cpuCores || this.options.cpuCores,
+                ioLimit: metadata.ioLimit || 0
+            };
+        } catch {
+            return {
+                ram: this.options.maxMemoryMB,
+                cpuLimit: 100,
+                cpuCores: this.options.cpuCores,
+                ioLimit: 0
+            };
+        }
     }
 
     getServerPath(userId, serverId) {
@@ -337,6 +424,8 @@ local-hostname: v87-vm
             diskSize,
             ram: options.ram || this.options.maxMemoryMB,
             cpuCores: options.cpuCores || this.options.cpuCores,
+            cpuLimit: options.cpuLimit || 100,
+            ioLimit: options.ioLimit || 0,
             defaultUser: image.defaultUser,
             password: password
         };
@@ -396,19 +485,29 @@ local-hostname: v87-vm
         }
 
         const ram = metadata.ram || this.options.maxMemoryMB;
-        const cpus = metadata.cpuCores || this.options.cpuCores;
+        const cpuLimit = metadata.cpuLimit || 100;
+        const ioLimit = metadata.ioLimit || 0;
 
         const logFile = path.join(logsPath, 'console.log');
         const logHandle = await fs.open(logFile, 'a');
 
         const cloudInitIso = path.join(serverPath, 'cloud-init.iso');
         
+        const cpuArgs = this.generateQemuCpuArgs(cpuLimit);
+        const qmpSocketPath = path.join(serverPath, 'qmp.sock');
+        
+        try {
+            await fs.unlink(qmpSocketPath);
+        } catch {}
+        
         const qemuArgs = [
             '-m', `${ram}`,
-            '-smp', `${cpus}`,
-            '-drive', `file=${diskPath},format=qcow2,if=virtio`,
+            ...cpuArgs,
+            '-drive', `file=${diskPath},format=qcow2,if=virtio${ioLimit > 0 ? `,throttling.bps-total=${ioLimit * 1024 * 1024}` : ''}`,
             '-netdev', 'user,id=net0',
             '-device', 'virtio-net-pci,netdev=net0',
+            '-device', 'virtio-balloon-pci,id=balloon0',
+            '-qmp', `unix:${qmpSocketPath},server,nowait`,
             '-nographic',
             '-serial', 'mon:stdio'
         ];
@@ -464,7 +563,9 @@ local-hostname: v87-vm
             process: proc,
             userId,
             startedAt: new Date().toISOString(),
-            logHandle
+            logHandle,
+            qmpSocketPath,
+            ram
         });
 
         this.serverStatus.set(serverId, 'running');
@@ -590,6 +691,139 @@ local-hostname: v87-vm
             });
         }
         return servers;
+    }
+
+    async qmpCommand(serverId, command, args = {}) {
+        const serverInfo = this.processes.get(serverId);
+        if (!serverInfo || !serverInfo.qmpSocketPath) {
+            throw new Error('Server not running or QMP not available');
+        }
+
+        return new Promise((resolve, reject) => {
+            const socket = net.createConnection(serverInfo.qmpSocketPath);
+            let buffer = '';
+            let negotiated = false;
+            const timeout = setTimeout(() => {
+                socket.destroy();
+                reject(new Error('QMP timeout'));
+            }, 5000);
+
+            socket.on('data', (data) => {
+                buffer += data.toString();
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const response = JSON.parse(line);
+                        
+                        if (response.QMP && !negotiated) {
+                            negotiated = true;
+                            socket.write(JSON.stringify({ execute: 'qmp_capabilities' }) + '\n');
+                        } else if (response.return !== undefined && negotiated) {
+                            if (command === 'qmp_capabilities') {
+                                return;
+                            }
+                            clearTimeout(timeout);
+                            socket.end();
+                            resolve(response.return);
+                        } else if (response.error) {
+                            clearTimeout(timeout);
+                            socket.end();
+                            reject(new Error(response.error.desc || 'QMP error'));
+                        } else if (negotiated && command !== 'qmp_capabilities') {
+                            socket.write(JSON.stringify({ execute: command, arguments: args }) + '\n');
+                        }
+                    } catch {}
+                }
+            });
+
+            socket.on('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+
+            socket.on('close', () => {
+                clearTimeout(timeout);
+            });
+        });
+    }
+
+    async getServerStats(serverId) {
+        const serverInfo = this.processes.get(serverId);
+        if (!serverInfo) {
+            return null;
+        }
+
+        const stats = {
+            pid: serverInfo.process.pid,
+            startedAt: serverInfo.startedAt,
+            uptime: Math.floor((Date.now() - new Date(serverInfo.startedAt).getTime()) / 1000),
+            configuredRam: serverInfo.ram,
+            memory: null,
+            cpu: null,
+            block: null
+        };
+
+        try {
+            const balloon = await this.qmpCommand(serverId, 'query-balloon');
+            if (balloon && balloon.actual) {
+                stats.memory = {
+                    actual: Math.floor(balloon.actual / 1024 / 1024),
+                    configured: serverInfo.ram
+                };
+            }
+        } catch {}
+
+        try {
+            const cpus = await this.qmpCommand(serverId, 'query-cpus-fast');
+            if (cpus && Array.isArray(cpus)) {
+                stats.cpu = {
+                    count: cpus.length,
+                    cpus: cpus.map(c => ({
+                        index: c['cpu-index'],
+                        halted: c.halted || false
+                    }))
+                };
+            }
+        } catch {}
+
+        try {
+            const blocks = await this.qmpCommand(serverId, 'query-block');
+            if (blocks && Array.isArray(blocks)) {
+                stats.block = blocks
+                    .filter(b => b.inserted)
+                    .map(b => ({
+                        device: b.device,
+                        file: b.inserted?.file,
+                        bytesWritten: b.inserted?.wr_bytes || 0,
+                        bytesRead: b.inserted?.rd_bytes || 0,
+                        opsWritten: b.inserted?.wr_operations || 0,
+                        opsRead: b.inserted?.rd_operations || 0
+                    }));
+            }
+        } catch {}
+
+        try {
+            const procStat = await fs.readFile(`/proc/${serverInfo.process.pid}/stat`, 'utf-8');
+            const parts = procStat.split(' ');
+            const utime = parseInt(parts[13]) || 0;
+            const stime = parseInt(parts[14]) || 0;
+            const starttime = parseInt(parts[21]) || 0;
+            
+            const uptime = await fs.readFile('/proc/uptime', 'utf-8');
+            const uptimeSecs = parseFloat(uptime.split(' ')[0]);
+            const hertz = 100;
+            
+            const totalTime = utime + stime;
+            const seconds = uptimeSecs - (starttime / hertz);
+            const cpuUsage = seconds > 0 ? ((totalTime / hertz) / seconds) * 100 : 0;
+            
+            stats.cpuUsage = Math.round(cpuUsage * 10) / 10;
+        } catch {}
+
+        return stats;
     }
 
     shutdown() {

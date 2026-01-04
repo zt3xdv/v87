@@ -158,17 +158,40 @@ app.use(express.static(path.join(__dirname, '..', '..', 'public')));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-let LIMITS = config.limits || { maxServers: 3, maxRam: 2048, maxDisk: 50 };
+let LIMITS = config.limits || { 
+    maxServers: 3, 
+    maxRam: 2048, 
+    maxDisk: 50,
+    maxCpu: 400,
+    maxIo: 100,
+    minRam: 512,
+    minDisk: 5,
+    minCpu: 25
+};
 
 function getUserLimits(user) {
+    const base = {
+        maxServers: LIMITS.maxServers,
+        maxRam: LIMITS.maxRam,
+        maxDisk: LIMITS.maxDisk,
+        maxCpu: LIMITS.maxCpu || 400,
+        maxIo: LIMITS.maxIo || 100,
+        minRam: LIMITS.minRam || 512,
+        minDisk: LIMITS.minDisk || 5,
+        minCpu: LIMITS.minCpu || 25
+    };
+    
     if (user.limits && Object.keys(user.limits).length > 0) {
         return {
-            maxServers: user.limits.maxServers || LIMITS.maxServers,
-            maxRam: user.limits.maxRam || LIMITS.maxRam,
-            maxDisk: user.limits.maxDisk || LIMITS.maxDisk
+            ...base,
+            maxServers: user.limits.maxServers || base.maxServers,
+            maxRam: user.limits.maxRam || base.maxRam,
+            maxDisk: user.limits.maxDisk || base.maxDisk,
+            maxCpu: user.limits.maxCpu || base.maxCpu,
+            maxIo: user.limits.maxIo || base.maxIo
         };
     }
-    return LIMITS;
+    return base;
 }
 
 // =====================
@@ -260,14 +283,25 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
             slotsUsed: servers.length,
             slotsMax: userLimits.maxServers,
             maxRam: userLimits.maxRam,
-            maxDisk: userLimits.maxDisk
+            maxDisk: userLimits.maxDisk,
+            maxCpu: userLimits.maxCpu,
+            maxIo: userLimits.maxIo,
+            minRam: userLimits.minRam,
+            minDisk: userLimits.minDisk,
+            minCpu: userLimits.minCpu
+        },
+        defaults: {
+            ram: config.vm?.defaultRam || 1024,
+            disk: parseInt((config.vm?.defaultDisk || '10G').replace('G', '')),
+            cpu: config.vm?.defaultCpu || 100,
+            io: config.vm?.defaultIo || 0
         }
     });
 });
 
 app.post('/api/server/create', requireAuth, async (req, res, next) => {
     try {
-        const { name, description, imageId, ram, diskSize } = req.body;
+        const { name, description, imageId } = req.body;
         const user = db.findUserById(req.user.id);
         const servers = db.getUserServers(user.id);
         const userLimits = getUserLimits(user);
@@ -281,15 +315,33 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
             }
         }
         
+        let ram = parseInt(req.body.ram) || config.vm?.defaultRam || 1024;
+        let cpuLimit = parseInt(req.body.cpuLimit) || config.vm?.defaultCpu || 100;
+        let ioLimit = parseInt(req.body.ioLimit) || config.vm?.defaultIo || 0;
+        
+        let diskSizeNum = parseInt((req.body.diskSize || '10G').replace('G', ''));
+        if (isNaN(diskSizeNum)) diskSizeNum = 10;
+        
+        if (req.user.role !== 'admin') {
+            ram = Math.max(userLimits.minRam, Math.min(ram, userLimits.maxRam));
+            cpuLimit = Math.max(userLimits.minCpu, Math.min(cpuLimit, userLimits.maxCpu));
+            ioLimit = Math.min(ioLimit, userLimits.maxIo);
+            diskSizeNum = Math.max(userLimits.minDisk, Math.min(diskSizeNum, userLimits.maxDisk));
+        }
+        
+        const diskSize = `${diskSizeNum}G`;
         const serverId = Date.now().toString();
+        
         const serverData = {
             id: serverId,
             ownerId: user.id,
             name: name || 'My VM',
             description: description || '',
             imageId: image.id,
-            ram: ram || config.vm?.defaultRam || 1024,
-            diskSize: diskSize || config.vm?.defaultDisk || '10G',
+            ram,
+            diskSize,
+            cpuLimit,
+            ioLimit,
             created_at: new Date(),
             status: 'creating'
         };
@@ -300,7 +352,9 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
         sandboxManager.createServer(user.id, serverId, {
             imageId: image.id,
             ram: serverData.ram,
-            diskSize: serverData.diskSize
+            diskSize: serverData.diskSize,
+            cpuLimit,
+            ioLimit
         }).then(() => {
             db.updateServer(serverId, { status: 'stopped' });
             log(`Server ${serverId} created successfully`);
@@ -464,6 +518,134 @@ app.post('/api/server/:id/settings', requireAuth, async (req, res, next) => {
         next(err);
     }
 });
+
+app.get('/api/server/:id/limits', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        const limits = await sandboxManager.getServerLimits(serverData.ownerId, serverData.id);
+        res.json(limits);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/server/:id/limits', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        const { ram, cpuLimit, ioLimit, cpuCores } = req.body;
+        const result = await sandboxManager.updateServerLimits(serverData.ownerId, serverData.id, {
+            ram, cpuLimit, ioLimit, cpuCores
+        });
+        
+        if (ram !== undefined) {
+            db.updateServer(req.params.id, { ram });
+        }
+        
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/api/server/:id/stats', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        if (sandboxManager.getServerStatus(serverData.id) !== 'running') {
+            return res.json({ running: false });
+        }
+        
+        const stats = await sandboxManager.getServerStats(serverData.id);
+        res.json({ running: true, ...stats });
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/api/server/:id/disk-info', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        const diskPath = sandboxManager.getDiskPath(serverData.ownerId, serverData.id);
+        
+        try {
+            const info = await sandboxManager.execCommand('qemu-img', ['info', '--output=json', diskPath]);
+            const parsed = JSON.parse(info);
+            
+            res.json({
+                virtualSize: formatBytes(parsed['virtual-size']),
+                actualSize: formatBytes(parsed['actual-size']),
+                format: parsed.format
+            });
+        } catch {
+            res.json({ virtualSize: '-', actualSize: '-', format: '-' });
+        }
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/server/:id/reinstall', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        if (sandboxManager.getServerStatus(serverData.id) === 'running') {
+            return res.status(400).json({ error: 'Stop the VM first' });
+        }
+        
+        db.updateServer(serverData.id, { status: 'creating' });
+        
+        await sandboxManager.deleteServer(serverData.ownerId, serverData.id);
+        
+        sandboxManager.createServer(serverData.ownerId, serverData.id, {
+            imageId: serverData.imageId,
+            ram: serverData.ram,
+            diskSize: serverData.diskSize,
+            cpuLimit: serverData.cpuLimit || 100,
+            ioLimit: serverData.ioLimit || 0
+        }).then(() => {
+            db.updateServer(serverData.id, { status: 'stopped' });
+            log(`Server ${serverData.id} reinstalled successfully`);
+        }).catch((err) => {
+            db.updateServer(serverData.id, { status: 'error', error: err.message });
+            log(`Server ${serverData.id} reinstall failed: ${err.message}`);
+        });
+        
+        res.json({ success: true });
+    } catch (err) {
+        next(err);
+    }
+});
+
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
 // =====================
 // ADMIN ROUTES

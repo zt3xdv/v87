@@ -352,6 +352,26 @@ const App = {
             document.getElementById('d-slots').textContent = data.stats.slotsUsed;
             document.getElementById('d-max-slots').textContent = data.stats.slotsMax;
 
+            const ramInput = document.getElementById('c-ram');
+            const diskInput = document.getElementById('c-disk');
+            const cpuInput = document.getElementById('c-cpu');
+            const ioInput = document.getElementById('c-io');
+            
+            ramInput.min = data.stats.minRam || 512;
+            ramInput.max = data.stats.maxRam || 8192;
+            ramInput.value = data.defaults?.ram || 1024;
+            
+            diskInput.min = data.stats.minDisk || 5;
+            diskInput.max = data.stats.maxDisk || 100;
+            diskInput.value = data.defaults?.disk || 10;
+            
+            cpuInput.min = data.stats.minCpu || 25;
+            cpuInput.max = data.stats.maxCpu || 400;
+            cpuInput.value = data.defaults?.cpu || 100;
+            
+            ioInput.max = data.stats.maxIo || 100;
+            ioInput.value = data.defaults?.io || 0;
+
             const imageSelect = document.getElementById('c-image');
             imageSelect.innerHTML = '<option value="">Select a Linux distribution...</option>';
             if (imagesData.images && imagesData.images.length > 0) {
@@ -373,12 +393,15 @@ const App = {
                     return;
                 }
                 
+                const diskValue = parseInt(document.getElementById('c-disk').value) || 10;
                 const payload = {
                     name: document.getElementById('c-name').value,
                     description: document.getElementById('c-desc').value,
                     imageId: imageId,
                     ram: parseInt(document.getElementById('c-ram').value) || 1024,
-                    diskSize: document.getElementById('c-disk').value || '10G'
+                    diskSize: `${diskValue}G`,
+                    cpuLimit: parseInt(document.getElementById('c-cpu').value) || 100,
+                    ioLimit: parseInt(document.getElementById('c-io').value) || 0
                 };
                 
                 const r = await fetch('/api/server/create', {
@@ -478,7 +501,273 @@ const App = {
             btnStop.textContent = 'Stop';
         };
 
-        App.renderServerConsole(document.getElementById('server-content'), id, server.status === 'running', updateStatus, server);
+        const tabConsole = document.getElementById('tab-console');
+        const tabStats = document.getElementById('tab-stats');
+        const tabSettings = document.getElementById('tab-settings');
+        const serverContent = document.getElementById('server-content');
+        
+        let currentTab = 'console';
+        let statsInterval = null;
+        
+        const renderCurrentTab = () => {
+            tabConsole.className = `tab-btn ${currentTab === 'console' ? 'active' : ''}`;
+            tabStats.className = `tab-btn ${currentTab === 'stats' ? 'active' : ''}`;
+            tabSettings.className = `tab-btn ${currentTab === 'settings' ? 'active' : ''}`;
+            
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            
+            if (currentTab === 'console') {
+                App.renderServerConsole(serverContent, id, server.status === 'running', updateStatus, server);
+            } else if (currentTab === 'stats') {
+                App.cleanupTerminal();
+                App.renderServerStats(serverContent, id, server, (interval) => { statsInterval = interval; });
+            } else {
+                App.cleanupTerminal();
+                App.renderServerSettings(serverContent, id, server, data, () => updateStatus(server.status === 'running'));
+            }
+        };
+        
+        tabConsole.onclick = () => {
+            if (currentTab !== 'console') {
+                currentTab = 'console';
+                renderCurrentTab();
+            }
+        };
+        
+        tabStats.onclick = () => {
+            if (currentTab !== 'stats') {
+                currentTab = 'stats';
+                renderCurrentTab();
+            }
+        };
+        
+        tabSettings.onclick = () => {
+            if (currentTab !== 'settings') {
+                currentTab = 'settings';
+                renderCurrentTab();
+            }
+        };
+        
+        renderCurrentTab();
+    },
+    
+    renderServerStats: async (container, id, server, setInterval) => {
+        const tmpl = document.getElementById('server-stats-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const formatBytes = (bytes) => {
+            if (!bytes || bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        };
+        
+        const formatUptime = (seconds) => {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            if (days > 0) return `${days}d ${hours}h ${mins}m`;
+            if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
+            if (mins > 0) return `${mins}m ${secs}s`;
+            return `${secs}s`;
+        };
+        
+        const updateStats = async () => {
+            try {
+                const res = await fetch(`/api/server/${id}/stats`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const stats = await res.json();
+                
+                if (!stats.running) {
+                    document.getElementById('stats-offline').classList.remove('hidden');
+                    document.getElementById('stats-content').style.opacity = '0.5';
+                    return;
+                }
+                
+                document.getElementById('stats-offline').classList.add('hidden');
+                document.getElementById('stats-content').style.opacity = '1';
+                
+                document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime || 0);
+                document.getElementById('stat-cpu').textContent = stats.cpuUsage !== undefined ? `${stats.cpuUsage}%` : '-';
+                
+                if (stats.cpu) {
+                    const active = stats.cpu.cpus.filter(c => !c.halted).length;
+                    document.getElementById('stat-cpu-cores').textContent = `${active}/${stats.cpu.count} cores active`;
+                }
+                
+                if (stats.memory) {
+                    document.getElementById('stat-memory').textContent = `${stats.memory.actual} / ${stats.memory.configured} MB`;
+                } else {
+                    document.getElementById('stat-memory').textContent = `${stats.configuredRam || '-'} MB`;
+                }
+                
+                if (stats.block && stats.block[0]) {
+                    const disk = stats.block[0];
+                    document.getElementById('stat-disk-read').textContent = formatBytes(disk.bytesRead);
+                    document.getElementById('stat-disk-write').textContent = formatBytes(disk.bytesWritten);
+                    document.getElementById('stat-disk-read-ops').textContent = disk.opsRead.toLocaleString();
+                    document.getElementById('stat-disk-write-ops').textContent = disk.opsWritten.toLocaleString();
+                }
+                
+                document.getElementById('stat-pid').textContent = stats.pid || '-';
+                document.getElementById('stat-started').textContent = stats.startedAt ? new Date(stats.startedAt).toLocaleString() : '-';
+                
+            } catch (e) {
+                console.error('Failed to fetch stats:', e);
+            }
+        };
+        
+        await updateStats();
+        const interval = window.setInterval(updateStats, 2000);
+        setInterval(interval);
+    },
+    
+    renderServerSettings: async (container, id, server, data, refreshStatus) => {
+        const tmpl = document.getElementById('server-settings-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        document.getElementById('set-name').value = server.name || '';
+        document.getElementById('set-desc').value = server.description || '';
+        
+        const isRunning = server.status === 'running';
+        if (isRunning) {
+            document.getElementById('settings-running-warning').classList.remove('hidden');
+        }
+        
+        try {
+            const limitsRes = await fetch(`/api/server/${id}/limits`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            if (limitsRes.ok) {
+                const limits = await limitsRes.json();
+                document.getElementById('set-ram').value = limits.ram || 1024;
+                document.getElementById('set-cpu').value = limits.cpuLimit || 100;
+                document.getElementById('set-io').value = limits.ioLimit || 0;
+                document.getElementById('set-cores').value = limits.cpuCores || 1;
+            }
+        } catch {}
+        
+        document.getElementById('set-disk-size').textContent = server.diskSize || '-';
+        
+        try {
+            const diskRes = await fetch(`/api/server/${id}/disk-info`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            if (diskRes.ok) {
+                const disk = await diskRes.json();
+                document.getElementById('set-disk-virtual').textContent = disk.virtualSize || '-';
+                document.getElementById('set-disk-actual').textContent = disk.actualSize || '-';
+            }
+        } catch {}
+        
+        document.getElementById('btn-save-info').onclick = async () => {
+            const btn = document.getElementById('btn-save-info');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            
+            await fetch(`/api/server/${id}/settings`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                },
+                body: JSON.stringify({
+                    name: document.getElementById('set-name').value,
+                    description: document.getElementById('set-desc').value
+                })
+            });
+            
+            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">check</span> Saved';
+            setTimeout(() => {
+                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">save</span> Save Info';
+                btn.disabled = false;
+            }, 2000);
+        };
+        
+        document.getElementById('btn-save-resources').onclick = async () => {
+            if (isRunning) {
+                document.getElementById('resources-status').textContent = 'Changes will apply after restart';
+            }
+            
+            const btn = document.getElementById('btn-save-resources');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            
+            const res = await fetch(`/api/server/${id}/limits`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                },
+                body: JSON.stringify({
+                    ram: parseInt(document.getElementById('set-ram').value),
+                    cpuLimit: parseInt(document.getElementById('set-cpu').value),
+                    ioLimit: parseInt(document.getElementById('set-io').value),
+                    cpuCores: parseInt(document.getElementById('set-cores').value)
+                })
+            });
+            
+            const data = await res.json();
+            if (data.requiresRestart) {
+                document.getElementById('resources-status').textContent = 'Saved! Restart VM to apply.';
+            } else {
+                document.getElementById('resources-status').textContent = 'Saved!';
+            }
+            
+            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">check</span> Saved';
+            setTimeout(() => {
+                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">save</span> Save Resources';
+                btn.disabled = false;
+            }, 2000);
+        };
+        
+        document.getElementById('btn-reinstall').onclick = async () => {
+            if (isRunning) {
+                return alert('Please stop the VM first');
+            }
+            if (!confirm('Reinstall VM? This will delete all data on the disk!')) return;
+            
+            const btn = document.getElementById('btn-reinstall');
+            btn.disabled = true;
+            btn.textContent = 'Reinstalling...';
+            
+            const res = await fetch(`/api/server/${id}/reinstall`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            if (res.ok) {
+                App.navigate(`/server/${id}/creating`);
+            } else {
+                const data = await res.json();
+                alert('Error: ' + data.error);
+                btn.disabled = false;
+                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">refresh</span> Reinstall VM';
+            }
+        };
+        
+        document.getElementById('btn-delete-vm').onclick = async () => {
+            if (isRunning) {
+                return alert('Please stop the VM first');
+            }
+            if (!confirm(`Delete VM ${server.name}? This cannot be undone!`)) return;
+            
+            await fetch(`/api/server/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            App.navigate('/dashboard');
+        };
     },
 
     renderServerConsole: (container, id, isInitiallyRunning, statusCallback, server) => {

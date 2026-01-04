@@ -4,12 +4,19 @@
   "limits": {
     "maxServers": 3,
     "maxRam": 4096,
-    "maxDisk": 100
+    "maxDisk": 100,
+    "maxCpu": 400,
+    "maxIo": 100,
+    "minRam": 512,
+    "minDisk": 5,
+    "minCpu": 25
   },
   "vm": {
     "defaultImage": "debian-12",
     "defaultRam": 1024,
     "defaultDisk": "10G",
+    "defaultCpu": 100,
+    "defaultIo": 0,
     "cpuCores": 2,
     "qemuPath": "qemu-system-x86_64",
     "enableKvm": false,

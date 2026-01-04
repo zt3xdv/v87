@@ -175,13 +175,20 @@
                             <input type="number" id="c-ram" class="form-control" value="1024" min="512" max="8192">
                         </div>
                         <div class="form-group" style="flex: 1;">
-                            <label>Disk Size</label>
-                            <select id="c-disk" class="form-control">
-                                <option value="5G">5 GB</option>
-                                <option value="10G" selected>10 GB</option>
-                                <option value="20G">20 GB</option>
-                                <option value="50G">50 GB</option>
-                            </select>
+                            <label>Disk Size (GB)</label>
+                            <input type="number" id="c-disk" class="form-control" value="10" min="1" max="500">
+                        </div>
+                    </div>
+                    <div class="d-flex gap-3">
+                        <div class="form-group" style="flex: 1;">
+                            <label>CPU Limit (%)</label>
+                            <input type="number" id="c-cpu" class="form-control" value="100" min="25" max="400">
+                            <small class="text-muted">100% = 1 vCPU</small>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>I/O Limit (MB/s)</label>
+                            <input type="number" id="c-io" class="form-control" value="0" min="0" max="100">
+                            <small class="text-muted">0 = unlimited</small>
                         </div>
                     </div>
                     <div class="form-group">
@@ -244,7 +251,209 @@
                 </button>
             </div>
         </div>
+        <div class="tabs mb-4">
+            <button class="tab-btn active" id="tab-console">
+                <span class="material-symbols-outlined icon-sm">terminal</span>
+                Console
+            </button>
+            <button class="tab-btn" id="tab-stats">
+                <span class="material-symbols-outlined icon-sm">monitoring</span>
+                Stats
+            </button>
+            <button class="tab-btn" id="tab-settings">
+                <span class="material-symbols-outlined icon-sm">settings</span>
+                Settings
+            </button>
+        </div>
         <div id="server-content"></div>
+    </template>
+    
+    <!-- VM STATS TAB -->
+    <template id="server-stats-template">
+        <div id="stats-offline" class="alert alert-warning hidden">
+            <span class="material-symbols-outlined icon-sm">power_off</span>
+            VM is not running. Start it to see live statistics.
+        </div>
+        
+        <div id="stats-content">
+            <div class="d-flex gap-3 flex-wrap mb-4">
+                <div class="card" style="flex: 1; min-width: 200px;">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">schedule</span>
+                        Uptime
+                    </div>
+                    <div class="card-body">
+                        <h3 id="stat-uptime" class="mb-0">-</h3>
+                    </div>
+                </div>
+                <div class="card" style="flex: 1; min-width: 200px;">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">memory</span>
+                        CPU Usage
+                    </div>
+                    <div class="card-body">
+                        <h3 id="stat-cpu" class="mb-0">-</h3>
+                        <small class="text-muted" id="stat-cpu-cores">-</small>
+                    </div>
+                </div>
+                <div class="card" style="flex: 1; min-width: 200px;">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">developer_board</span>
+                        Memory
+                    </div>
+                    <div class="card-body">
+                        <h3 id="stat-memory" class="mb-0">-</h3>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card mb-4">
+                <div class="card-header">
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">storage</span>
+                    Disk I/O
+                </div>
+                <div class="card-body">
+                    <div class="stat-item">
+                        <span>Read</span>
+                        <span id="stat-disk-read">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span>Written</span>
+                        <span id="stat-disk-write">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span>Read Operations</span>
+                        <span id="stat-disk-read-ops">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span>Write Operations</span>
+                        <span id="stat-disk-write-ops">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">info</span>
+                    Process Info
+                </div>
+                <div class="card-body">
+                    <div class="stat-item">
+                        <span>PID</span>
+                        <span id="stat-pid">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span>Started At</span>
+                        <span id="stat-started">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <!-- VM SETTINGS TAB -->
+    <template id="server-settings-template">
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">info</span>
+                VM Information
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label>VM Name</label>
+                    <input type="text" id="set-name" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="set-desc" class="form-control">
+                </div>
+                <button id="btn-save-info" class="btn btn-accent">
+                    <span class="material-symbols-outlined icon-sm">save</span>
+                    Save Info
+                </button>
+            </div>
+        </div>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">memory</span>
+                Resources
+            </div>
+            <div class="card-body">
+                <div id="settings-running-warning" class="alert alert-warning hidden mb-4">
+                    <span class="material-symbols-outlined icon-sm">warning</span>
+                    VM must be stopped to change resource limits. Changes will apply on next start.
+                </div>
+                <div class="d-flex gap-3 flex-wrap">
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label>RAM (MB)</label>
+                        <input type="number" id="set-ram" class="form-control" min="128" max="65536">
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label>CPU Limit (%)</label>
+                        <input type="number" id="set-cpu" class="form-control" min="10" max="1600">
+                        <small class="text-muted">100% = 1 vCPU</small>
+                    </div>
+                </div>
+                <div class="d-flex gap-3 flex-wrap">
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label>I/O Limit (MB/s)</label>
+                        <input type="number" id="set-io" class="form-control" min="0">
+                        <small class="text-muted">0 = unlimited</small>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label>vCPU Cores</label>
+                        <input type="number" id="set-cores" class="form-control" min="1" max="16">
+                    </div>
+                </div>
+                <button id="btn-save-resources" class="btn btn-accent">
+                    <span class="material-symbols-outlined icon-sm">save</span>
+                    Save Resources
+                </button>
+                <span id="resources-status" class="text-muted text-sm ml-3"></span>
+            </div>
+        </div>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">storage</span>
+                Storage
+            </div>
+            <div class="card-body">
+                <div class="stat-item">
+                    <span>Current Disk Size</span>
+                    <span id="set-disk-size">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Virtual Size</span>
+                    <span id="set-disk-virtual">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Actual Usage</span>
+                    <span id="set-disk-actual">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card" style="border-color: var(--danger);">
+            <div class="card-header" style="color: var(--danger);">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">warning</span>
+                Danger Zone
+            </div>
+            <div class="card-body">
+                <p class="text-muted text-sm mb-3">These actions are irreversible.</p>
+                <div class="d-flex gap-2 flex-wrap">
+                    <button id="btn-reinstall" class="btn btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">refresh</span>
+                        Reinstall VM
+                    </button>
+                    <button id="btn-delete-vm" class="btn btn-danger">
+                        <span class="material-symbols-outlined icon-sm">delete</span>
+                        Delete VM
+                    </button>
+                </div>
+            </div>
+        </div>
     </template>
 
     <!-- VM CONSOLE -->

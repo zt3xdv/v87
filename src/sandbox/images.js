@@ -8,7 +8,7 @@ export const VM_IMAGES = {
         description: 'Debian 13 Generic Cloud',
         url: 'https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2',
         defaultUser: 'root',
-        defaultSize: '4G'
+        defaultSize: '2G'
     },
     'debian-12': {
         id: 'debian-12',
