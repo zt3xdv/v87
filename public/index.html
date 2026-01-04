@@ -545,10 +545,29 @@
     
     <!-- ADMIN CONFIG TAB -->
     <template id="admin-config-template">
+        <div class="admin-stats mb-4">
+            <div class="stat-card">
+                <div class="stat-icon"><span class="material-symbols-outlined">group</span></div>
+                <div><div class="stat-value" id="cfg-total-users">-</div><div class="stat-label">Users</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><span class="material-symbols-outlined">computer</span></div>
+                <div><div class="stat-value" id="cfg-total-servers">-</div><div class="stat-label">Total VMs</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon" style="background: rgba(34, 197, 94, 0.1); color: var(--success);"><span class="material-symbols-outlined">play_circle</span></div>
+                <div><div class="stat-value" id="cfg-running">-</div><div class="stat-label">Running</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><span class="material-symbols-outlined">dns</span></div>
+                <div><div class="stat-value" id="cfg-port">-</div><div class="stat-label">Port</div></div>
+            </div>
+        </div>
+        
         <div class="card mb-4">
             <div class="card-header">
                 <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">tune</span>
-                Default Limits
+                Resource Limits
             </div>
             <div class="card-body">
                 <div id="config-success" class="alert alert-success hidden">
@@ -556,18 +575,44 @@
                     Configuration saved
                 </div>
                 <form id="config-form">
-                    <div class="d-flex gap-3 mb-4 flex-wrap">
-                        <div class="form-group" style="flex: 1; min-width: 150px;">
-                            <label>Max VMs per User</label>
+                    <p class="text-muted text-sm mb-3">Maximum resources per user (non-admin)</p>
+                    <div class="d-flex gap-3 mb-3 flex-wrap">
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Max VMs</label>
                             <input type="number" id="cfg-max-servers" class="form-control" required>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 150px;">
-                            <label>Max RAM per User (MB)</label>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Max RAM (MB)</label>
                             <input type="number" id="cfg-max-ram" class="form-control" required>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 150px;">
-                            <label>Max Disk per User (GB)</label>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Max Disk (GB)</label>
                             <input type="number" id="cfg-max-disk" class="form-control" required>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-3 mb-3 flex-wrap">
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Max CPU (%)</label>
+                            <input type="number" id="cfg-max-cpu" class="form-control" required>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Max I/O (MB/s)</label>
+                            <input type="number" id="cfg-max-io" class="form-control" required>
+                        </div>
+                    </div>
+                    <p class="text-muted text-sm mb-3 mt-4">Minimum resources per VM</p>
+                    <div class="d-flex gap-3 mb-4 flex-wrap">
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Min RAM (MB)</label>
+                            <input type="number" id="cfg-min-ram" class="form-control" required>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Min Disk (GB)</label>
+                            <input type="number" id="cfg-min-disk" class="form-control" required>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Min CPU (%)</label>
+                            <input type="number" id="cfg-min-cpu" class="form-control" required>
                         </div>
                     </div>
                     <button type="submit" class="btn btn-accent">
@@ -578,27 +623,52 @@
             </div>
         </div>
         
-        <div class="card">
+        <div class="card mb-4">
             <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">info</span>
-                System Info
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">settings</span>
+                VM Defaults
             </div>
             <div class="card-body">
-                <div class="stat-item">
-                    <span>Panel Port</span>
-                    <span id="cfg-port">-</span>
-                </div>
-                <div class="stat-item">
-                    <span>Total Users</span>
-                    <span id="cfg-total-users">-</span>
-                </div>
-                <div class="stat-item">
-                    <span>Total VMs</span>
-                    <span id="cfg-total-servers">-</span>
-                </div>
-                <div class="stat-item">
-                    <span>Running VMs</span>
-                    <span id="cfg-running">-</span>
+                <form id="defaults-form">
+                    <div class="d-flex gap-3 mb-4 flex-wrap">
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Default RAM (MB)</label>
+                            <input type="number" id="cfg-def-ram" class="form-control">
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Default Disk (GB)</label>
+                            <input type="number" id="cfg-def-disk" class="form-control">
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Default CPU (%)</label>
+                            <input type="number" id="cfg-def-cpu" class="form-control">
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                            <label>Default I/O (MB/s)</label>
+                            <input type="number" id="cfg-def-io" class="form-control">
+                            <small class="text-muted">0 = unlimited</small>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">save</span>
+                        Save Defaults
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <div class="card" style="border-color: var(--danger);">
+            <div class="card-header" style="color: var(--danger);">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">warning</span>
+                Danger Zone
+            </div>
+            <div class="card-body">
+                <div class="d-flex gap-2 flex-wrap align-center">
+                    <button id="btn-stop-all" class="btn btn-secondary">
+                        <span class="material-symbols-outlined icon-sm">stop</span>
+                        Stop All VMs
+                    </button>
+                    <span class="text-muted text-sm">Force stop all running virtual machines</span>
                 </div>
             </div>
         </div>
@@ -648,7 +718,7 @@
                             <label class="font-bold">Custom Limits (leave empty for default)</label>
                         </div>
                         
-                        <div class="d-flex gap-3 flex-wrap">
+                        <div class="d-flex gap-3 flex-wrap mb-3">
                             <div class="form-group" style="flex: 1; min-width: 100px;">
                                 <label>Max VMs</label>
                                 <input type="number" id="edit-limit-servers" class="form-control" placeholder="Default">
@@ -656,6 +726,22 @@
                             <div class="form-group" style="flex: 1; min-width: 100px;">
                                 <label>Max RAM (MB)</label>
                                 <input type="number" id="edit-limit-ram" class="form-control" placeholder="Default">
+                            </div>
+                        </div>
+                        <div class="d-flex gap-3 flex-wrap mb-3">
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>Max Disk (GB)</label>
+                                <input type="number" id="edit-limit-disk" class="form-control" placeholder="Default">
+                            </div>
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>Max CPU (%)</label>
+                                <input type="number" id="edit-limit-cpu" class="form-control" placeholder="Default">
+                            </div>
+                        </div>
+                        <div class="d-flex gap-3 flex-wrap">
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>Max I/O (MB/s)</label>
+                                <input type="number" id="edit-limit-io" class="form-control" placeholder="Default">
                             </div>
                         </div>
                         
@@ -682,7 +768,7 @@
     <!-- SERVER EDIT MODAL (Admin) -->
     <template id="server-edit-template">
         <div class="editor-overlay">
-            <div class="editor-container" style="max-width: 500px; height: auto; max-height: 90%;">
+            <div class="editor-container" style="max-width: 550px; height: auto; max-height: 90%;">
                 <div class="editor-header">
                     <span class="d-flex align-center gap-2">
                         <span class="material-symbols-outlined icon-sm">computer</span>
@@ -697,15 +783,44 @@
                     <div id="server-edit-success" class="alert alert-success hidden">Saved</div>
                     
                     <form id="server-edit-form">
-                        <div class="form-group">
-                            <label>VM Name</label>
-                            <input type="text" id="edit-server-name" class="form-control" required>
+                        <div class="d-flex gap-3 flex-wrap mb-3">
+                            <div class="form-group" style="flex: 2; min-width: 150px;">
+                                <label>VM Name</label>
+                                <input type="text" id="edit-server-name" class="form-control" required>
+                            </div>
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>Status</label>
+                                <div id="edit-server-status" class="badge" style="margin-top: 0.5rem;">-</div>
+                            </div>
                         </div>
                         
                         <div class="form-group">
                             <label>Description</label>
                             <input type="text" id="edit-server-desc" class="form-control">
                         </div>
+                        
+                        <hr style="border-color: var(--border-color); margin: 1rem 0;">
+                        
+                        <div class="mb-3">
+                            <label class="font-bold">Resources</label>
+                        </div>
+                        
+                        <div class="d-flex gap-3 flex-wrap mb-3">
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>RAM (MB)</label>
+                                <input type="number" id="edit-server-ram" class="form-control">
+                            </div>
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>CPU (%)</label>
+                                <input type="number" id="edit-server-cpu" class="form-control">
+                            </div>
+                            <div class="form-group" style="flex: 1; min-width: 100px;">
+                                <label>I/O (MB/s)</label>
+                                <input type="number" id="edit-server-io" class="form-control">
+                            </div>
+                        </div>
+                        
+                        <hr style="border-color: var(--border-color); margin: 1rem 0;">
                         
                         <div class="form-group">
                             <label class="d-flex align-center gap-2">
@@ -722,16 +837,34 @@
                         <div class="d-flex gap-2 mt-4">
                             <button type="submit" class="btn btn-accent flex-1">
                                 <span class="material-symbols-outlined icon-sm">save</span>
-                                Save Changes
+                                Save
                             </button>
-                            <button type="button" id="btn-force-stop" class="btn btn-secondary">
+                            <button type="button" id="btn-force-stop" class="btn btn-secondary" title="Force Stop">
                                 <span class="material-symbols-outlined icon-sm">stop</span>
                             </button>
-                            <button type="button" id="btn-delete-server-admin" class="btn btn-danger">
+                            <button type="button" id="btn-reinstall-admin" class="btn btn-secondary" title="Reinstall">
+                                <span class="material-symbols-outlined icon-sm">refresh</span>
+                            </button>
+                            <button type="button" id="btn-delete-server-admin" class="btn btn-danger" title="Delete">
                                 <span class="material-symbols-outlined icon-sm">delete</span>
                             </button>
                         </div>
                     </form>
+                    
+                    <div class="mt-4" style="background: var(--bg-app); padding: 0.75rem; border-radius: var(--radius-sm);">
+                        <div class="d-flex justify-between text-sm mb-1">
+                            <span class="text-muted">Owner</span>
+                            <span id="edit-server-owner">-</span>
+                        </div>
+                        <div class="d-flex justify-between text-sm mb-1">
+                            <span class="text-muted">Image</span>
+                            <span id="edit-server-image">-</span>
+                        </div>
+                        <div class="d-flex justify-between text-sm">
+                            <span class="text-muted">Disk</span>
+                            <span id="edit-server-disk">-</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

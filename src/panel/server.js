@@ -833,16 +833,72 @@ app.get('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
 
 app.post('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
     try {
-        const { name, description } = req.body;
+        const { name, description, ram, cpuLimit, ioLimit } = req.body;
         const serverData = db.getServer(req.params.id);
         if (!serverData) return res.status(404).json({ error: 'Server not found' });
         
         const updates = {};
         if (name !== undefined) updates.name = name;
         if (description !== undefined) updates.description = description;
+        if (ram !== undefined) updates.ram = ram;
+        if (cpuLimit !== undefined) updates.cpuLimit = cpuLimit;
+        if (ioLimit !== undefined) updates.ioLimit = ioLimit;
         
         const updated = db.updateServer(req.params.id, updates);
+        
+        if (ram !== undefined || cpuLimit !== undefined || ioLimit !== undefined) {
+            await sandboxManager.updateServerLimits(serverData.ownerId, serverData.id, {
+                ram, cpuLimit, ioLimit
+            }).catch(() => {});
+        }
+        
         res.json({ success: true, server: updated });
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/admin/server/:id/reinstall', requireAdmin, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        
+        if (sandboxManager.getServerStatus(serverData.id) === 'running') {
+            return res.status(400).json({ error: 'Stop the VM first' });
+        }
+        
+        db.updateServer(serverData.id, { status: 'creating' });
+        
+        await sandboxManager.deleteServer(serverData.ownerId, serverData.id);
+        
+        sandboxManager.createServer(serverData.ownerId, serverData.id, {
+            imageId: serverData.imageId,
+            ram: serverData.ram,
+            diskSize: serverData.diskSize,
+            cpuLimit: serverData.cpuLimit || 100,
+            ioLimit: serverData.ioLimit || 0
+        }).then(() => {
+            db.updateServer(serverData.id, { status: 'stopped' });
+            log(`Server ${serverData.id} reinstalled by admin`);
+        }).catch((err) => {
+            db.updateServer(serverData.id, { status: 'error', error: err.message });
+        });
+        
+        res.json({ success: true });
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/admin/stop-all', requireAdmin, async (req, res, next) => {
+    try {
+        const running = sandboxManager.getRunningServers();
+        for (const s of running) {
+            sandboxManager.stopServer(s.serverId);
+            db.updateServer(s.serverId, { status: 'stopped' });
+        }
+        log(`Admin stopped all VMs (${running.length} total)`);
+        res.json({ success: true, stopped: running.length });
     } catch (err) {
         next(err);
     }

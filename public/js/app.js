@@ -953,6 +953,16 @@ const App = {
             document.getElementById('cfg-max-servers').value = config.limits?.maxServers || 3;
             document.getElementById('cfg-max-ram').value = config.limits?.maxRam || 2048;
             document.getElementById('cfg-max-disk').value = config.limits?.maxDisk || 50;
+            document.getElementById('cfg-max-cpu').value = config.limits?.maxCpu || 400;
+            document.getElementById('cfg-max-io').value = config.limits?.maxIo || 100;
+            document.getElementById('cfg-min-ram').value = config.limits?.minRam || 512;
+            document.getElementById('cfg-min-disk').value = config.limits?.minDisk || 5;
+            document.getElementById('cfg-min-cpu').value = config.limits?.minCpu || 25;
+            
+            document.getElementById('cfg-def-ram').value = config.vm?.defaultRam || 1024;
+            document.getElementById('cfg-def-disk').value = parseInt((config.vm?.defaultDisk || '10G').replace('G', ''));
+            document.getElementById('cfg-def-cpu').value = config.vm?.defaultCpu || 100;
+            document.getElementById('cfg-def-io').value = config.vm?.defaultIo || 0;
             
             document.getElementById('cfg-port').textContent = config.port || 3000;
             document.getElementById('cfg-total-users').textContent = stats.totalUsers;
@@ -976,7 +986,12 @@ const App = {
                         limits: {
                             maxServers: parseInt(document.getElementById('cfg-max-servers').value),
                             maxRam: parseInt(document.getElementById('cfg-max-ram').value),
-                            maxDisk: parseInt(document.getElementById('cfg-max-disk').value)
+                            maxDisk: parseInt(document.getElementById('cfg-max-disk').value),
+                            maxCpu: parseInt(document.getElementById('cfg-max-cpu').value),
+                            maxIo: parseInt(document.getElementById('cfg-max-io').value),
+                            minRam: parseInt(document.getElementById('cfg-min-ram').value),
+                            minDisk: parseInt(document.getElementById('cfg-min-disk').value),
+                            minCpu: parseInt(document.getElementById('cfg-min-cpu').value)
                         }
                     })
                 });
@@ -988,6 +1003,59 @@ const App = {
             } catch (e) { console.error(e); }
             
             btn.disabled = false;
+        };
+        
+        document.getElementById('defaults-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            
+            try {
+                await fetch('/api/admin/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({
+                        vm: {
+                            defaultRam: parseInt(document.getElementById('cfg-def-ram').value),
+                            defaultDisk: document.getElementById('cfg-def-disk').value + 'G',
+                            defaultCpu: parseInt(document.getElementById('cfg-def-cpu').value),
+                            defaultIo: parseInt(document.getElementById('cfg-def-io').value)
+                        }
+                    })
+                });
+                
+                document.getElementById('config-success').classList.remove('hidden');
+                setTimeout(() => document.getElementById('config-success').classList.add('hidden'), 3000);
+            } catch (e) { console.error(e); }
+            
+            btn.disabled = false;
+        };
+        
+        document.getElementById('btn-stop-all').onclick = async () => {
+            if (!confirm('Stop ALL running VMs? This will force stop every VM.')) return;
+            
+            const btn = document.getElementById('btn-stop-all');
+            btn.disabled = true;
+            btn.textContent = 'Stopping...';
+            
+            try {
+                await fetch('/api/admin/stop-all', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                
+                const statsRes = await fetch('/api/admin/stats', { 
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
+                });
+                const stats = await statsRes.json();
+                document.getElementById('cfg-running').textContent = stats.runningServers;
+            } catch (e) { console.error(e); }
+            
+            btn.disabled = false;
+            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">stop</span> Stop All VMs';
         };
     },
     
@@ -1011,6 +1079,9 @@ const App = {
         if (user.limits) {
             document.getElementById('edit-limit-servers').value = user.limits.maxServers || '';
             document.getElementById('edit-limit-ram').value = user.limits.maxRam || '';
+            document.getElementById('edit-limit-disk').value = user.limits.maxDisk || '';
+            document.getElementById('edit-limit-cpu').value = user.limits.maxCpu || '';
+            document.getElementById('edit-limit-io').value = user.limits.maxIo || '';
         }
         
         const serversList = document.getElementById('user-servers-list');
@@ -1052,9 +1123,15 @@ const App = {
             const limits = {};
             const maxServers = document.getElementById('edit-limit-servers').value;
             const maxRam = document.getElementById('edit-limit-ram').value;
+            const maxDisk = document.getElementById('edit-limit-disk').value;
+            const maxCpu = document.getElementById('edit-limit-cpu').value;
+            const maxIo = document.getElementById('edit-limit-io').value;
             
             if (maxServers) limits.maxServers = parseInt(maxServers);
             if (maxRam) limits.maxRam = parseInt(maxRam);
+            if (maxDisk) limits.maxDisk = parseInt(maxDisk);
+            if (maxCpu) limits.maxCpu = parseInt(maxCpu);
+            if (maxIo) limits.maxIo = parseInt(maxIo);
             
             const payload = {
                 role: document.getElementById('edit-role').value,
@@ -1098,12 +1175,39 @@ const App = {
         document.getElementById('edit-server-suspended').checked = server.suspended || false;
         document.getElementById('edit-server-suspend-reason').value = server.suspendReason || '';
         
+        const statusBadge = document.getElementById('edit-server-status');
+        statusBadge.textContent = server.status?.toUpperCase() || 'STOPPED';
+        statusBadge.className = `badge ${server.status === 'running' ? 'running' : 'stopped'}`;
+        
+        document.getElementById('edit-server-owner').textContent = server.ownerName || '-';
+        document.getElementById('edit-server-image').textContent = server.imageName || '-';
+        document.getElementById('edit-server-disk').textContent = server.diskSize || '-';
+        
+        document.getElementById('edit-server-ram').value = server.ram || 1024;
+        document.getElementById('edit-server-cpu').value = server.cpuLimit || 100;
+        document.getElementById('edit-server-io').value = server.ioLimit || 0;
+        
         document.getElementById('btn-close-server-edit').onclick = () => overlay.remove();
         
         document.getElementById('btn-force-stop').onclick = async () => {
             if (!confirm('Force stop this VM?')) return;
             
             await fetch(`/api/admin/server/${server.id}/force-stop`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            overlay.remove();
+            onSave();
+        };
+        
+        document.getElementById('btn-reinstall-admin').onclick = async () => {
+            if (server.status === 'running') {
+                return alert('Stop the VM first');
+            }
+            if (!confirm(`Reinstall ${server.name}? This will delete all disk data!`)) return;
+            
+            await fetch(`/api/admin/server/${server.id}/reinstall`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
             });
@@ -1137,7 +1241,10 @@ const App = {
             
             const payload = {
                 name: document.getElementById('edit-server-name').value,
-                description: document.getElementById('edit-server-desc').value
+                description: document.getElementById('edit-server-desc').value,
+                ram: parseInt(document.getElementById('edit-server-ram').value),
+                cpuLimit: parseInt(document.getElementById('edit-server-cpu').value),
+                ioLimit: parseInt(document.getElementById('edit-server-io').value)
             };
             
             await fetch(`/api/admin/server/${server.id}`, {

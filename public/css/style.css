@@ -511,6 +511,7 @@ label {
 }
 
 /* === TABS === */
+.tabs,
 .server-tabs {
     display: flex;
     gap: 0.25rem;
@@ -519,10 +520,15 @@ label {
     background: var(--bg-surface);
     border-radius: var(--radius-md);
     border: 1px solid var(--border-color);
+    overflow-x: auto;
 }
 
+.tab-btn,
 .tab-link {
-    padding: 0.5rem 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.55rem 1rem;
     color: var(--text-muted);
     border-radius: var(--radius-sm);
     transition: var(--transition-fast);
@@ -531,16 +537,24 @@ label {
     border: none;
     background: none;
     cursor: pointer;
+    white-space: nowrap;
 }
 
+.tab-btn:hover,
 .tab-link:hover {
     color: var(--text-main);
     background: var(--bg-surface-hover);
 }
 
+.tab-btn.active,
 .tab-link.active {
     color: white;
     background: var(--accent);
+}
+
+.tab-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* === EDITOR === */
