@@ -902,7 +902,10 @@ app.delete('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
 // CATCH-ALL
 // =====================
 
-app.get(/.*/, (req, res) => {
+app.use((req, res) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'Not found' });
+    }
     res.sendFile(path.join(__dirname, '..', '..', 'public', 'index.html'));
 });
 
