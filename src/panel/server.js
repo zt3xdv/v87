@@ -471,6 +471,14 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/register', (req, res) => {
+    // Check if registration is disabled
+    const settings = db.getSettings();
+    const isFirstUser = db.getUsers().length === 0;
+    
+    if (settings.registrationDisabled && !isFirstUser) {
+        return res.status(403).json({ error: 'Registration is currently disabled' });
+    }
+    
     const ip = req.ip || req.connection.remoteAddress || 'unknown';
     
     // Rate limit registrations: 3 per hour per IP
@@ -2170,6 +2178,30 @@ app.post('/api/admin/server/:id/transfer', requireAdmin, async (req, res) => {
 // =====================
 // MAINTENANCE MODE
 // =====================
+
+app.get('/api/admin/settings', requireAdmin, (req, res) => {
+    const settings = db.getSettings();
+    res.json({
+        registrationDisabled: settings.registrationDisabled || false,
+        maintenance: settings.maintenance || false,
+        maintenanceMessage: settings.maintenanceMessage || 'System is under maintenance'
+    });
+});
+
+app.post('/api/admin/settings', requireAdmin, (req, res) => {
+    const { registrationDisabled } = req.body;
+    
+    const updates = {};
+    if (typeof registrationDisabled === 'boolean') {
+        updates.registrationDisabled = registrationDisabled;
+    }
+    
+    db.updateSettings(updates);
+    audit(req.user.id, req.user.username, 'settings_updated', updates);
+    log(`Settings updated by ${req.user.username}: ${JSON.stringify(updates)}`);
+    
+    res.json({ success: true, ...db.getSettings() });
+});
 
 app.get('/api/admin/maintenance', requireAdmin, (req, res) => {
     const settings = db.getSettings();

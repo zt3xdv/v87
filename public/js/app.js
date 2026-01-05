@@ -1512,6 +1512,28 @@ const App = {
         container.innerHTML = '';
         container.appendChild(tmpl);
         
+        // Load settings
+        const settingsRes = await fetch('/api/admin/settings', {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        const settings = await settingsRes.json();
+        
+        document.getElementById('setting-disable-registration').checked = settings.registrationDisabled;
+        
+        document.getElementById('btn-save-settings').onclick = async () => {
+            const registrationDisabled = document.getElementById('setting-disable-registration').checked;
+            
+            await fetch('/api/admin/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                body: JSON.stringify({ registrationDisabled })
+            });
+            
+            const successEl = document.getElementById('settings-success');
+            successEl.classList.remove('hidden');
+            setTimeout(() => successEl.classList.add('hidden'), 3000);
+        };
+        
         const res = await fetch('/api/admin/maintenance', {
             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         });
