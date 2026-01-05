@@ -5,7 +5,22 @@ const App = {
     socket: null,
     fitAddon: null,
 
+    initTheme: () => {
+        const saved = localStorage.getItem('theme') || 'dark';
+        App.setTheme(saved);
+    },
+
+    setTheme: (theme) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    },
+
+    getTheme: () => {
+        return localStorage.getItem('theme') || 'dark';
+    },
+
     init: async () => {
+        App.initTheme();
         const token = localStorage.getItem('token');
         if (token) {
             try {
@@ -1625,11 +1640,38 @@ const App = {
                             <div class="text-sm text-muted">${w.url}</div>
                             <div class="text-sm">${w.events.map(e => `<span class="badge" style="font-size: 0.7rem;">${e}</span>`).join(' ')}</div>
                         </div>
-                        <button class="btn btn-sm btn-danger btn-delete-wh" data-id="${w.id}">
-                            <span class="material-symbols-outlined icon-sm">delete</span>
-                        </button>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-secondary btn-test-wh" data-id="${w.id}">
+                                <span class="material-symbols-outlined icon-sm">send</span>
+                            </button>
+                            <button class="btn btn-sm btn-danger btn-delete-wh" data-id="${w.id}">
+                                <span class="material-symbols-outlined icon-sm">delete</span>
+                            </button>
+                        </div>
                     </div>
                 `).join('');
+                
+                list.querySelectorAll('.btn-test-wh').forEach(btn => {
+                    btn.onclick = async () => {
+                        btn.disabled = true;
+                        btn.innerHTML = '<span class="material-symbols-outlined icon-sm">hourglass_empty</span>';
+                        
+                        const res = await fetch(`/api/webhooks/${btn.dataset.id}/test`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                        });
+                        const data = await res.json();
+                        
+                        btn.disabled = false;
+                        btn.innerHTML = '<span class="material-symbols-outlined icon-sm">send</span>';
+                        
+                        if (data.success) {
+                            alert('Webhook test successful!');
+                        } else {
+                            alert('Webhook test failed: ' + (data.error || 'Unknown error'));
+                        }
+                    };
+                });
                 
                 list.querySelectorAll('.btn-delete-wh').forEach(btn => {
                     btn.onclick = async () => {
@@ -1687,16 +1729,23 @@ const App = {
         const data = await res.json();
         const prefs = data.preferences || {};
         
-        document.getElementById('pref-theme').value = prefs.theme || 'dark';
+        document.getElementById('pref-theme').value = App.getTheme();
         document.getElementById('pref-font-size').value = prefs.terminalFontSize || 14;
         document.getElementById('pref-default-view').value = prefs.defaultView || 'console';
         document.getElementById('pref-notifications').checked = prefs.notifications || false;
+        
+        // Apply theme immediately on change
+        document.getElementById('pref-theme').onchange = (e) => {
+            App.setTheme(e.target.value);
+        };
         
         document.getElementById('btn-save-prefs').onclick = async () => {
             const theme = document.getElementById('pref-theme').value;
             const terminalFontSize = parseInt(document.getElementById('pref-font-size').value);
             const defaultView = document.getElementById('pref-default-view').value;
             const notifications = document.getElementById('pref-notifications').checked;
+            
+            App.setTheme(theme);
             
             await fetch('/api/preferences', {
                 method: 'POST',
