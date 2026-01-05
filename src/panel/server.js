@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import net from 'node:net';
 import { Server } from 'socket.io';
 import path from 'node:path';
 import fs from 'fs-extra';
@@ -126,6 +127,92 @@ io.on('connection', (socket) => {
     });
     
     socket.on('disconnect', () => {});
+});
+
+// VNC WebSocket proxy
+io.of('/vnc').use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+        return next(new Error('Authentication required'));
+    }
+    
+    const user = verifyToken(token);
+    if (!user) {
+        return next(new Error('Invalid token'));
+    }
+    
+    socket.user = user;
+    next();
+});
+
+io.of('/vnc').on('connection', (socket) => {
+    const serverId = socket.handshake.query.serverId;
+    
+    if (!isValidId(serverId)) {
+        socket.emit('error', 'Invalid server ID');
+        socket.disconnect();
+        return;
+    }
+    
+    const serverData = db.getServer(serverId);
+    if (!serverData) {
+        socket.emit('error', 'Server not found');
+        socket.disconnect();
+        return;
+    }
+    
+    if (serverData.ownerId !== socket.user.id && socket.user.role !== 'admin') {
+        socket.emit('error', 'Access denied');
+        socket.disconnect();
+        return;
+    }
+    
+    const vncSocketPath = sandboxManager.getVncSocketPath(serverId);
+    if (!vncSocketPath) {
+        socket.emit('error', 'VNC not available - VM may not be running');
+        socket.disconnect();
+        return;
+    }
+    
+    let vncSocket = null;
+    
+    try {
+        vncSocket = net.createConnection(vncSocketPath);
+        
+        vncSocket.on('connect', () => {
+            socket.emit('vnc-connected');
+        });
+        
+        vncSocket.on('data', (data) => {
+            socket.emit('vnc-data', data);
+        });
+        
+        vncSocket.on('error', (err) => {
+            socket.emit('error', 'VNC connection error: ' + err.message);
+            socket.disconnect();
+        });
+        
+        vncSocket.on('close', () => {
+            socket.emit('vnc-disconnected');
+            socket.disconnect();
+        });
+        
+        socket.on('vnc-data', (data) => {
+            if (vncSocket && !vncSocket.destroyed) {
+                vncSocket.write(Buffer.from(data));
+            }
+        });
+        
+        socket.on('disconnect', () => {
+            if (vncSocket && !vncSocket.destroyed) {
+                vncSocket.destroy();
+            }
+        });
+        
+    } catch (err) {
+        socket.emit('error', 'Failed to connect to VNC: ' + err.message);
+        socket.disconnect();
+    }
 });
 
 sandboxManager.on('log', (serverId, data) => {

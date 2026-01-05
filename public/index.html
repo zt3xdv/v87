@@ -240,11 +240,14 @@
                 <span class="material-symbols-outlined icon-sm">terminal</span>
                 Console
             </button>
+            <button class="tab-btn" id="tab-vnc">
+                <span class="material-symbols-outlined icon-sm">desktop_windows</span>
+                VNC
+            </button>
             <button class="tab-btn" id="tab-stats">
                 <span class="material-symbols-outlined icon-sm">monitoring</span>
                 Stats
             </button>
-
             <button class="tab-btn" id="tab-schedules">
                 <span class="material-symbols-outlined icon-sm">schedule</span>
                 Tasks
@@ -529,6 +532,37 @@
     <template id="server-console-template">
         <div class="card" style="border: none; background: transparent; box-shadow: none;">
             <div id="terminal" style="height: 500px;"></div>
+        </div>
+    </template>
+    
+    <!-- VM VNC -->
+    <template id="server-vnc-template">
+        <div class="card">
+            <div class="card-header d-flex justify-between align-center">
+                <span>
+                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">desktop_windows</span>
+                    VNC Display
+                </span>
+                <div class="d-flex gap-2 align-center">
+                    <span id="vnc-status" class="badge">DISCONNECTED</span>
+                    <button id="btn-vnc-connect" class="btn btn-sm btn-accent">
+                        <span class="material-symbols-outlined icon-sm">power</span>
+                        Connect
+                    </button>
+                    <button id="btn-vnc-fullscreen" class="btn btn-sm btn-secondary" disabled>
+                        <span class="material-symbols-outlined icon-sm">fullscreen</span>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body" style="padding: 0; background: #000; min-height: 400px;">
+                <div id="vnc-container" style="width: 100%; display: flex; align-items: center; justify-content: center; min-height: 400px;">
+                    <div id="vnc-placeholder" class="text-muted text-center" style="padding: 2rem;">
+                        <span class="material-symbols-outlined" style="font-size: 3rem; opacity: 0.3; display: block; margin-bottom: 1rem;">desktop_windows</span>
+                        <p>Click "Connect" to start VNC session</p>
+                        <p class="text-sm">Requires the VM to be running</p>
+                    </div>
+                </div>
+            </div>
         </div>
     </template>
     
@@ -1341,6 +1375,7 @@
     <script src="/js/xterm.js"></script>
     <script src="/js/xterm-addon-fit.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/vnc-client.js"></script>
     <script src="/js/app.js"></script>
 </body>
 </html>

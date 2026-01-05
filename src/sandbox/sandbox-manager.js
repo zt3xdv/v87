@@ -524,6 +524,12 @@ local-hostname: v87-vm
             await fs.unlink(qmpSocketPath);
         } catch {}
         
+        const vncSocketPath = path.join(serverPath, 'vnc.sock');
+        
+        try {
+            await fs.unlink(vncSocketPath);
+        } catch {}
+        
         const qemuArgs = [
             '-m', `${ram}`,
             ...cpuArgs,
@@ -532,6 +538,7 @@ local-hostname: v87-vm
             '-device', 'virtio-net-pci,netdev=net0',
             '-device', 'virtio-balloon-pci,id=balloon0',
             '-qmp', `unix:${qmpSocketPath},server,nowait`,
+            '-vnc', `unix:${vncSocketPath}`,
             '-nographic',
             '-serial', 'mon:stdio'
         ];
@@ -587,6 +594,7 @@ local-hostname: v87-vm
             startedAt: new Date().toISOString(),
             logHandle,
             qmpSocketPath,
+            vncSocketPath,
             ram
         });
 
@@ -713,6 +721,14 @@ local-hostname: v87-vm
             });
         }
         return servers;
+    }
+
+    getVncSocketPath(serverId) {
+        const serverInfo = this.processes.get(serverId);
+        if (!serverInfo || !serverInfo.vncSocketPath) {
+            return null;
+        }
+        return serverInfo.vncSocketPath;
     }
 
     async qmpCommand(serverId, command, args = {}) {

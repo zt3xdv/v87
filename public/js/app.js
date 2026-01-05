@@ -133,6 +133,7 @@ const App = {
     term: null,
     socket: null,
     fitAddon: null,
+    vncClient: null,
 
     initTheme: () => {
         const saved = localStorage.getItem('theme') || 'dark';
@@ -331,6 +332,13 @@ const App = {
         if (App.term) {
             App.term.dispose();
             App.term = null;
+        }
+    },
+
+    cleanupVnc: () => {
+        if (App.vncClient) {
+            App.vncClient.destroy();
+            App.vncClient = null;
         }
     },
 
@@ -662,6 +670,7 @@ const App = {
         };
 
         const tabConsole = document.getElementById('tab-console');
+        const tabVnc = document.getElementById('tab-vnc');
         const tabStats = document.getElementById('tab-stats');
         const tabSchedules = document.getElementById('tab-schedules');
         const tabSettings = document.getElementById('tab-settings');
@@ -672,6 +681,7 @@ const App = {
         
         const renderCurrentTab = () => {
             tabConsole.className = `tab-btn ${currentTab === 'console' ? 'active' : ''}`;
+            tabVnc.className = `tab-btn ${currentTab === 'vnc' ? 'active' : ''}`;
             tabStats.className = `tab-btn ${currentTab === 'stats' ? 'active' : ''}`;
             tabSchedules.className = `tab-btn ${currentTab === 'schedules' ? 'active' : ''}`;
             tabSettings.className = `tab-btn ${currentTab === 'settings' ? 'active' : ''}`;
@@ -681,8 +691,13 @@ const App = {
                 statsInterval = null;
             }
             
+            App.cleanupVnc();
+            
             if (currentTab === 'console') {
                 App.renderServerConsole(serverContent, id, server.status === 'running', updateStatus, server);
+            } else if (currentTab === 'vnc') {
+                App.cleanupTerminal();
+                App.renderServerVnc(serverContent, id, server);
             } else if (currentTab === 'stats') {
                 App.cleanupTerminal();
                 App.renderServerStats(serverContent, id, server, (interval) => { statsInterval = interval; });
@@ -698,6 +713,13 @@ const App = {
         tabConsole.onclick = () => {
             if (currentTab !== 'console') {
                 currentTab = 'console';
+                renderCurrentTab();
+            }
+        };
+        
+        tabVnc.onclick = () => {
+            if (currentTab !== 'vnc') {
+                currentTab = 'vnc';
                 renderCurrentTab();
             }
         };
@@ -1123,6 +1145,72 @@ const App = {
         });
 
         App.socket.on('connect_error', () => {});
+    },
+
+    renderServerVnc: (container, id, server) => {
+        const tmpl = document.getElementById('server-vnc-template').content.cloneNode(true);
+        container.innerHTML = '';
+        container.appendChild(tmpl);
+        
+        const vncContainer = document.getElementById('vnc-container');
+        const placeholder = document.getElementById('vnc-placeholder');
+        const statusBadge = document.getElementById('vnc-status');
+        const connectBtn = document.getElementById('btn-vnc-connect');
+        const fullscreenBtn = document.getElementById('btn-vnc-fullscreen');
+        
+        let connected = false;
+        
+        const updateStatus = (status) => {
+            statusBadge.textContent = status.toUpperCase();
+            statusBadge.className = `badge ${status === 'connected' ? 'running' : status === 'connecting' ? '' : 'stopped'}`;
+            connectBtn.innerHTML = status === 'connected' 
+                ? '<span class="material-symbols-outlined icon-sm">power_off</span> Disconnect'
+                : '<span class="material-symbols-outlined icon-sm">power</span> Connect';
+            fullscreenBtn.disabled = status !== 'connected';
+        };
+        
+        connectBtn.onclick = () => {
+            if (connected) {
+                App.cleanupVnc();
+                placeholder.style.display = 'block';
+                connected = false;
+                updateStatus('disconnected');
+                return;
+            }
+            
+            placeholder.style.display = 'none';
+            updateStatus('connecting');
+            
+            App.vncClient = new VNCClient(vncContainer, {
+                onConnect: () => {
+                    connected = true;
+                    updateStatus('connected');
+                },
+                onDisconnect: () => {
+                    connected = false;
+                    updateStatus('disconnected');
+                    placeholder.style.display = 'block';
+                },
+                onError: (err) => {
+                    Dialog.warning(err, 'VNC Error');
+                    connected = false;
+                    updateStatus('disconnected');
+                    placeholder.style.display = 'block';
+                }
+            });
+            
+            App.vncClient.connect(id, localStorage.getItem('token'));
+        };
+        
+        fullscreenBtn.onclick = () => {
+            if (App.vncClient && App.vncClient.canvas) {
+                if (App.vncClient.canvas.requestFullscreen) {
+                    App.vncClient.canvas.requestFullscreen();
+                } else if (App.vncClient.canvas.webkitRequestFullscreen) {
+                    App.vncClient.canvas.webkitRequestFullscreen();
+                }
+            }
+        };
     },
 
     // =====================
