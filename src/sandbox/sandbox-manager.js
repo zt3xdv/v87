@@ -539,7 +539,8 @@ local-hostname: v87-vm
             '-device', 'virtio-balloon-pci,id=balloon0',
             '-qmp', `unix:${qmpSocketPath},server,nowait`,
             '-vnc', `unix:${vncSocketPath}`,
-            '-nographic',
+            '-vga', 'virtio',
+            '-display', 'none',
             '-serial', 'mon:stdio'
         ];
 
