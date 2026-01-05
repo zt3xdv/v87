@@ -121,7 +121,7 @@ class VNCClient {
     }
     
     send(data) {
-        if (this.socket && this.connected) {
+        if (this.socket && (this.connected || this.state === 'handshake' || this.state === 'security' || this.state === 'security-result' || this.state === 'init')) {
             this.socket.emit('vnc-data', data);
         }
     }
