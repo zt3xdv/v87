@@ -1756,6 +1756,29 @@ const App = {
             document.getElementById('prefs-success').classList.remove('hidden');
             setTimeout(() => document.getElementById('prefs-success').classList.add('hidden'), 2000);
         };
+        
+        // Security - Revoke all sessions
+        document.getElementById('btn-revoke-all-sessions').onclick = async () => {
+            if (!confirm('This will log you out from all devices. Continue?')) return;
+            
+            const btn = document.getElementById('btn-revoke-all-sessions');
+            btn.disabled = true;
+            btn.textContent = 'Logging out...';
+            
+            try {
+                await fetch('/api/revoke-tokens', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                
+                localStorage.removeItem('token');
+                App.user = null;
+                App.navigate('/login');
+            } catch (e) {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="material-symbols-outlined icon-sm">logout</span> Logout All Sessions';
+            }
+        };
     },
     
     renderActivity: async (container) => {
@@ -1838,6 +1861,29 @@ const App = {
         }
         
         document.getElementById('btn-close-user-edit').onclick = () => overlay.remove();
+        
+        document.getElementById('btn-revoke-tokens').onclick = async () => {
+            if (!confirm(`Logout all sessions for ${user.username}?`)) return;
+            
+            const btn = document.getElementById('btn-revoke-tokens');
+            btn.disabled = true;
+            
+            const res = await fetch(`/api/admin/user/${userId}/revoke-tokens`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            btn.disabled = false;
+            
+            if (res.ok) {
+                document.getElementById('user-edit-success').textContent = 'All sessions logged out';
+                document.getElementById('user-edit-success').classList.remove('hidden');
+                setTimeout(() => document.getElementById('user-edit-success').classList.add('hidden'), 2000);
+            } else {
+                const data = await res.json();
+                alert('Error: ' + data.error);
+            }
+        };
         
         document.getElementById('btn-delete-user').onclick = async () => {
             if (!confirm(`Delete user ${user.username}? This will delete all their VMs!`)) return;

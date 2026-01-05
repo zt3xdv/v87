@@ -1133,6 +1133,21 @@
                 </button>
             </div>
         </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm mr-2">security</span>
+                Security
+            </div>
+            <div class="card-body">
+                <div id="security-success" class="alert alert-success hidden mb-3"></div>
+                <p class="text-sm text-muted mb-3">Logout from all devices and sessions. You will need to login again.</p>
+                <button id="btn-revoke-all-sessions" class="btn btn-danger">
+                    <span class="material-symbols-outlined icon-sm">logout</span>
+                    Logout All Sessions
+                </button>
+            </div>
+        </div>
     </template>
     
     <!-- USER ACTIVITY TAB -->
@@ -1223,7 +1238,10 @@
                         <div class="d-flex gap-2 mt-4">
                             <button type="submit" class="btn btn-accent flex-1">
                                 <span class="material-symbols-outlined icon-sm">save</span>
-                                Save Changes
+                                Save
+                            </button>
+                            <button type="button" id="btn-revoke-tokens" class="btn btn-secondary" title="Logout all sessions">
+                                <span class="material-symbols-outlined icon-sm">logout</span>
                             </button>
                             <button type="button" id="btn-delete-user" class="btn btn-danger">
                                 <span class="material-symbols-outlined icon-sm">delete</span>
