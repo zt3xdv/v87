@@ -507,7 +507,6 @@ app.post('/api/register', (req, res) => {
         return res.status(400).json({ error: 'Username taken' });
     }
     const hashedPassword = bcrypt.hashSync(password, 10);
-    const isFirstUser = db.getUsers().length === 0;
     
     let user = {
         id: Date.now().toString(),
