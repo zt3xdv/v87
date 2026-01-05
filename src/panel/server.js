@@ -146,9 +146,12 @@ io.of('/vnc').use((socket, next) => {
 });
 
 io.of('/vnc').on('connection', (socket) => {
-    const serverId = socket.handshake.query.serverId;
+    const serverId = socket.handshake.query?.serverId;
     
-    if (!isValidId(serverId)) {
+    log(`VNC connection attempt for server: ${serverId}`);
+    
+    if (!serverId || !isValidId(serverId)) {
+        log(`VNC rejected: invalid server ID "${serverId}"`);
         socket.emit('error', 'Invalid server ID');
         socket.disconnect();
         return;

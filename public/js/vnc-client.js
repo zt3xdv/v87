@@ -60,13 +60,20 @@ class VNCClient {
             this.disconnect();
         }
         
+        if (!serverId) {
+            this.showStatus('Error: No server ID');
+            this.onError('No server ID provided');
+            return;
+        }
+        
         this.state = 'connecting';
         this.showStatus('Connecting to VNC...');
         
-        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        console.log('VNC connecting to server:', serverId);
+        
         this.socket = io('/vnc', {
             auth: { token },
-            query: { serverId },
+            query: { serverId: serverId },
             transports: ['websocket']
         });
         
