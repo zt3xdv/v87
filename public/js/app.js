@@ -663,7 +663,6 @@ const App = {
 
         const tabConsole = document.getElementById('tab-console');
         const tabStats = document.getElementById('tab-stats');
-        const tabSnapshots = document.getElementById('tab-snapshots');
         const tabSchedules = document.getElementById('tab-schedules');
         const tabSettings = document.getElementById('tab-settings');
         const serverContent = document.getElementById('server-content');
@@ -674,7 +673,6 @@ const App = {
         const renderCurrentTab = () => {
             tabConsole.className = `tab-btn ${currentTab === 'console' ? 'active' : ''}`;
             tabStats.className = `tab-btn ${currentTab === 'stats' ? 'active' : ''}`;
-            tabSnapshots.className = `tab-btn ${currentTab === 'snapshots' ? 'active' : ''}`;
             tabSchedules.className = `tab-btn ${currentTab === 'schedules' ? 'active' : ''}`;
             tabSettings.className = `tab-btn ${currentTab === 'settings' ? 'active' : ''}`;
             
@@ -688,9 +686,6 @@ const App = {
             } else if (currentTab === 'stats') {
                 App.cleanupTerminal();
                 App.renderServerStats(serverContent, id, server, (interval) => { statsInterval = interval; });
-            } else if (currentTab === 'snapshots') {
-                App.cleanupTerminal();
-                App.renderServerSnapshots(serverContent, id, server);
             } else if (currentTab === 'schedules') {
                 App.cleanupTerminal();
                 App.renderServerSchedules(serverContent, id, server);
@@ -710,13 +705,6 @@ const App = {
         tabStats.onclick = () => {
             if (currentTab !== 'stats') {
                 currentTab = 'stats';
-                renderCurrentTab();
-            }
-        };
-        
-        tabSnapshots.onclick = () => {
-            if (currentTab !== 'snapshots') {
-                currentTab = 'snapshots';
                 renderCurrentTab();
             }
         };
@@ -1500,92 +1488,6 @@ const App = {
                 statusEl.textContent = data.error;
                 statusEl.className = 'text-sm ml-3 text-danger';
             }
-        };
-    },
-    
-    renderServerSnapshots: async (container, id, server) => {
-        const tmpl = document.getElementById('server-snapshots-template').content.cloneNode(true);
-        container.innerHTML = '';
-        container.appendChild(tmpl);
-        
-        const loadSnapshots = async () => {
-            const res = await fetch(`/api/server/${id}/snapshots`, {
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-            });
-            const data = await res.json();
-            const list = document.getElementById('snapshots-list');
-            
-            if (data.snapshots && data.snapshots.length > 0) {
-                list.innerHTML = data.snapshots.map(s => `
-                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
-                        <div>
-                            <strong>${s.name || s.id}</strong>
-                            <div class="text-sm text-muted">${s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}</div>
-                        </div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-secondary btn-restore" data-id="${s.id}">
-                                <span class="material-symbols-outlined icon-sm">restore</span> Restore
-                            </button>
-                            <button class="btn btn-sm btn-danger btn-delete-snap" data-id="${s.id}">
-                                <span class="material-symbols-outlined icon-sm">delete</span>
-                            </button>
-                        </div>
-                    </div>
-                `).join('');
-                
-                list.querySelectorAll('.btn-restore').forEach(btn => {
-                    btn.onclick = async () => {
-                        const confirmed = await Dialog.confirm('Restore this snapshot? Current state will be lost.', 'Restore Snapshot', { danger: true, confirmText: 'Restore' });
-                        if (!confirmed) return;
-                        btn.disabled = true;
-                        await fetch(`/api/server/${id}/snapshots/${btn.dataset.id}/restore`, {
-                            method: 'POST',
-                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-                        });
-                        btn.disabled = false;
-                        await Dialog.success('Snapshot restored successfully');
-                    };
-                });
-                
-                list.querySelectorAll('.btn-delete-snap').forEach(btn => {
-                    btn.onclick = async () => {
-                        const confirmed = await Dialog.confirm('Delete this snapshot?', 'Delete Snapshot', { danger: true, confirmText: 'Delete' });
-                        if (!confirmed) return;
-                        await fetch(`/api/server/${id}/snapshots/${btn.dataset.id}`, {
-                            method: 'DELETE',
-                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-                        });
-                        loadSnapshots();
-                    };
-                });
-            } else {
-                list.innerHTML = '<div class="text-muted">No snapshots yet</div>';
-            }
-        };
-        
-        await loadSnapshots();
-        
-        document.getElementById('btn-create-snapshot').onclick = async () => {
-            const name = await Dialog.prompt('Enter a name for this snapshot', 'Create Snapshot', { placeholder: 'Snapshot name (optional)' });
-            if (name === null) return;
-            const btn = document.getElementById('btn-create-snapshot');
-            btn.disabled = true;
-            btn.textContent = 'Creating...';
-            
-            const res = await fetch(`/api/server/${id}/snapshots`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-                body: JSON.stringify({ name: name || `Snapshot ${new Date().toLocaleDateString()}` })
-            });
-            
-            if (!res.ok) {
-                const data = await res.json();
-                await Dialog.warning('Error: ' + data.error);
-            }
-            
-            btn.disabled = false;
-            btn.innerHTML = '<span class="material-symbols-outlined icon-sm">add</span> Create Snapshot';
-            loadSnapshots();
         };
     },
     

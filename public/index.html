@@ -244,10 +244,7 @@
                 <span class="material-symbols-outlined icon-sm">monitoring</span>
                 Stats
             </button>
-            <button class="tab-btn" id="tab-snapshots">
-                <span class="material-symbols-outlined icon-sm">photo_camera</span>
-                Snaps
-            </button>
+
             <button class="tab-btn" id="tab-schedules">
                 <span class="material-symbols-outlined icon-sm">schedule</span>
                 Tasks
@@ -532,28 +529,6 @@
     <template id="server-console-template">
         <div class="card" style="border: none; background: transparent; box-shadow: none;">
             <div id="terminal" style="height: 500px;"></div>
-        </div>
-    </template>
-    
-    <!-- VM SNAPSHOTS TAB -->
-    <template id="server-snapshots-template">
-        <div class="card mb-4">
-            <div class="card-header d-flex justify-between align-center">
-                <span>
-                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">photo_camera</span>
-                    Snapshots
-                </span>
-                <button id="btn-create-snapshot" class="btn btn-sm btn-accent">
-                    <span class="material-symbols-outlined icon-sm">add</span>
-                    Create Snapshot
-                </button>
-            </div>
-            <div class="card-body">
-                <p class="text-muted text-sm mb-3">Save the current state of your VM. Maximum 5 snapshots.</p>
-                <div id="snapshots-list">
-                    <div class="text-muted text-sm">Loading...</div>
-                </div>
-            </div>
         </div>
     </template>
     
