@@ -2330,12 +2330,11 @@ h1{color:#e74c3c}pre{background:#f1f1f1;padding:10px;border-radius:4px;text-alig
     req.pipe(proxyReq);
 }
 
-app.all('/s/:serverId/:path(*)', async (req, res) => {
-    await proxyToVm(req, res, req.params.serverId);
-});
-
-app.all('/s/:serverId', async (req, res) => {
-    await proxyToVm(req, res, req.params.serverId);
+app.use('/s/:serverId', async (req, res, next) => {
+    if (req.path === '/' || req.path === '') {
+        return proxyToVm(req, res, req.params.serverId);
+    }
+    return proxyToVm(req, res, req.params.serverId);
 });
 
 // =====================
