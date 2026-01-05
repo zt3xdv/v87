@@ -1183,6 +1183,8 @@ const App = {
             
             App.cleanupVnc();
             
+            vncContainer.innerHTML = "";
+            
             App.vncClient = new VNCClient(vncContainer, {
                 onConnect: () => {
                     connected = true;
