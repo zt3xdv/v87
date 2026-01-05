@@ -1181,6 +1181,8 @@ const App = {
             placeholder.style.display = 'none';
             updateStatus('connecting');
             
+            App.cleanupVnc();
+            
             App.vncClient = new VNCClient(vncContainer, {
                 onConnect: () => {
                     connected = true;
