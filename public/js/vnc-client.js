@@ -34,6 +34,7 @@ class VNCClient {
         this.canvas.style.height = 'auto';
         this.canvas.style.objectFit = 'contain';
         this.canvas.style.margin = '0 auto';
+        this.canvas.style.cursor = 'none';
         this.canvas.tabIndex = 1;
         this.container.style.overflow = 'hidden';
         this.container.style.display = 'flex';
@@ -42,12 +43,22 @@ class VNCClient {
         this.container.appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
         
+        this.cursorX = 0;
+        this.cursorY = 0;
+        this.cursorVisible = true;
+        this.touchState = { active: false, lastX: 0, lastY: 0, button: 0 };
+        
         this.canvas.addEventListener('mousedown', (e) => this.handleMouse(e, 1));
         this.canvas.addEventListener('mouseup', (e) => this.handleMouse(e, 0));
         this.canvas.addEventListener('mousemove', (e) => this.handleMouse(e, -1));
         this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
         this.canvas.addEventListener('keydown', (e) => this.handleKey(e, true));
         this.canvas.addEventListener('keyup', (e) => this.handleKey(e, false));
+        
+        this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e), { passive: false });
+        this.canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
+        this.canvas.addEventListener('touchend', (e) => this.handleTouchEnd(e), { passive: false });
+        this.canvas.addEventListener('touchcancel', (e) => this.handleTouchEnd(e), { passive: false });
         
         window.addEventListener('resize', () => this.fitToContainer());
         
@@ -392,6 +403,7 @@ class VNCClient {
         }
         
         this.ctx.putImageData(this.frameBuffer, 0, 0);
+        this.drawCursor();
         
         setTimeout(() => this.requestUpdate(true), 33);
         
@@ -435,10 +447,76 @@ class VNCClient {
         const x = Math.floor((e.clientX - rect.left) * scaleX);
         const y = Math.floor((e.clientY - rect.top) * scaleY);
         
+        this.cursorX = x;
+        this.cursorY = y;
+        
         if (buttonMask === -1) {
             buttonMask = (e.buttons & 1) | ((e.buttons & 2) << 1) | ((e.buttons & 4) >> 1);
         }
         
+        this.sendPointer(x, y, buttonMask);
+    }
+    
+    handleTouchStart(e) {
+        if (!this.connected) return;
+        e.preventDefault();
+        
+        const touch = e.touches[0];
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.width / rect.width;
+        const scaleY = this.height / rect.height;
+        
+        const x = Math.floor((touch.clientX - rect.left) * scaleX);
+        const y = Math.floor((touch.clientY - rect.top) * scaleY);
+        
+        this.cursorX = x;
+        this.cursorY = y;
+        
+        if (e.touches.length === 2) {
+            this.touchState = { active: true, lastX: x, lastY: y, button: 4 };
+            this.sendPointer(x, y, 4);
+        } else {
+            this.touchState = { active: true, lastX: x, lastY: y, button: 1, startTime: Date.now(), startX: x, startY: y };
+            this.sendPointer(x, y, 1);
+        }
+        
+        this.drawCursor();
+    }
+    
+    handleTouchMove(e) {
+        if (!this.connected || !this.touchState.active) return;
+        e.preventDefault();
+        
+        const touch = e.touches[0];
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.width / rect.width;
+        const scaleY = this.height / rect.height;
+        
+        const x = Math.floor((touch.clientX - rect.left) * scaleX);
+        const y = Math.floor((touch.clientY - rect.top) * scaleY);
+        
+        this.cursorX = x;
+        this.cursorY = y;
+        this.touchState.lastX = x;
+        this.touchState.lastY = y;
+        
+        this.sendPointer(x, y, this.touchState.button);
+        this.drawCursor();
+    }
+    
+    handleTouchEnd(e) {
+        if (!this.connected) return;
+        e.preventDefault();
+        
+        if (this.touchState.active) {
+            this.sendPointer(this.touchState.lastX, this.touchState.lastY, 0);
+            this.touchState.active = false;
+        }
+        
+        this.drawCursor();
+    }
+    
+    sendPointer(x, y, buttonMask) {
         const msg = new Uint8Array(6);
         msg[0] = 5;
         msg[1] = buttonMask;
@@ -447,6 +525,31 @@ class VNCClient {
         msg[4] = (y >> 8) & 0xff;
         msg[5] = y & 0xff;
         this.send(msg);
+    }
+    
+    drawCursor() {
+        if (!this.cursorVisible || !this.connected) return;
+        
+        this.ctx.putImageData(this.frameBuffer, 0, 0);
+        
+        const x = this.cursorX;
+        const y = this.cursorY;
+        
+        this.ctx.fillStyle = '#fff';
+        this.ctx.strokeStyle = '#000';
+        this.ctx.lineWidth = 1;
+        
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, y);
+        this.ctx.lineTo(x, y + 16);
+        this.ctx.lineTo(x + 4, y + 12);
+        this.ctx.lineTo(x + 7, y + 18);
+        this.ctx.lineTo(x + 9, y + 17);
+        this.ctx.lineTo(x + 6, y + 11);
+        this.ctx.lineTo(x + 11, y + 11);
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.stroke();
     }
     
     handleKey(e, down) {
