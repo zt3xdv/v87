@@ -876,23 +876,59 @@ local-hostname: v87-vm
         return stats;
     }
 
-    async getVmProxyPort(serverId) {
+    async getVmProxyPort(serverId, targetPort = 443) {
         const serverInfo = this.processes.get(serverId);
         if (!serverInfo) return null;
+        
+        // Check if we already cached the port
+        const cacheKey = `port_${targetPort}`;
+        if (serverInfo[cacheKey]) {
+            return serverInfo[cacheKey];
+        }
         
         // Try to get port from QMP info
         try {
             const netInfo = await this.qmpCommand(serverId, 'human-monitor-command', 
                 { 'command-line': 'info usernet' });
             
-            // Parse output to find hostfwd port for 443
-            const match = netInfo.match(/TCP\[HOST_FORWARD\].*?(\d+)\s*->\s*.*?:443/);
-            if (match) {
-                return parseInt(match[1]);
+            // Parse output to find hostfwd port
+            // Format: "TCP[HOST_FORWARD] 127.0.0.1:XXXXX -> 10.0.2.15:443"
+            // or: "HOST_FORWARD 127.0.0.1 XXXXX 10.0.2.15 443"
+            const lines = netInfo.split('\n');
+            for (const line of lines) {
+                // Match format: TCP[HOST_FORWARD] host:port -> guest:targetPort
+                const match1 = line.match(/TCP.*HOST_FORWARD.*?127\.0\.0\.1[:\s]+(\d+).*?[:\s]+(\d+)\s*$/);
+                if (match1 && parseInt(match1[2]) === targetPort) {
+                    const port = parseInt(match1[1]);
+                    serverInfo[cacheKey] = port;
+                    return port;
+                }
+                
+                // Alternative format with arrow
+                const match2 = line.match(/127\.0\.0\.1:(\d+)\s*->\s*[\d\.]+:(\d+)/);
+                if (match2 && parseInt(match2[2]) === targetPort) {
+                    const port = parseInt(match2[1]);
+                    serverInfo[cacheKey] = port;
+                    return port;
+                }
+                
+                // Simple format: just find port -> targetPort pattern
+                const match3 = line.match(/:(\d+)\s*(?:->|to)\s*.*?:(\d+)/i);
+                if (match3 && parseInt(match3[2]) === targetPort) {
+                    const port = parseInt(match3[1]);
+                    serverInfo[cacheKey] = port;
+                    return port;
+                }
             }
-        } catch {}
+        } catch (err) {
+            // QMP command failed
+        }
         
         return null;
+    }
+    
+    async getVmProxyPort80(serverId) {
+        return this.getVmProxyPort(serverId, 80);
     }
 
     getProxyInfo(serverId) {

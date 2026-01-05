@@ -2242,9 +2242,7 @@ app.get('/api/maintenance-status', (req, res) => {
 // VM HTTP PROXY - /s/:serverId/*
 // =====================
 
-app.all('/s/:serverId/', async (req, res) => {
-    const { serverId } = req.params;
-    
+async function proxyToVm(req, res, serverId, useHttps = true) {
     const serverData = db.getServer(serverId);
     if (!serverData) {
         return res.status(404).json({ error: 'Server not found' });
@@ -2254,17 +2252,35 @@ app.all('/s/:serverId/', async (req, res) => {
         return res.status(503).json({ error: 'VM is not running' });
     }
     
-    // Get proxy port
+    // Get proxy port - try HTTPS (443) first, then HTTP (80)
     let proxyPort = null;
+    let isHttps = useHttps;
+    
     try {
-        proxyPort = await sandboxManager.getVmProxyPort(serverId);
+        proxyPort = await sandboxManager.getVmProxyPort(serverId, 443);
+        if (!proxyPort) {
+            proxyPort = await sandboxManager.getVmProxyPort(serverId, 80);
+            isHttps = false;
+        }
     } catch {}
     
     if (!proxyPort) {
-        return res.status(503).json({ error: 'VM proxy not ready. Try again in a few seconds.' });
+        return res.status(503).send(`<!DOCTYPE html>
+<html><head><title>Proxy Not Ready</title>
+<style>body{font-family:system-ui;max-width:600px;margin:50px auto;padding:20px;text-align:center}
+h1{color:#e74c3c}code{background:#f1f1f1;padding:2px 8px;border-radius:4px}
+button{margin-top:20px;padding:10px 20px;cursor:pointer}</style></head>
+<body><h1>VM Proxy Not Ready</h1>
+<p>The VM web server is not responding on ports 443 or 80.</p>
+<p>Make sure your VM has a web server running on one of these ports:</p>
+<ul style="text-align:left">
+<li><code>nginx</code>, <code>apache2</code>, or similar</li>
+<li>Listening on port <code>443</code> (HTTPS) or <code>80</code> (HTTP)</li>
+</ul>
+<button onclick="location.reload()">Retry</button>
+</body></html>`);
     }
     
-    // Proxy the request using native https
     const targetPath = req.url.replace(`/s/${serverId}`, '') || '/';
     
     const proxyOptions = {
@@ -2277,27 +2293,50 @@ app.all('/s/:serverId/', async (req, res) => {
     };
     
     delete proxyOptions.headers['host'];
-    proxyOptions.headers['host'] = `127.0.0.1:${proxyPort}`;
+    proxyOptions.headers['host'] = req.headers.host || `127.0.0.1:${proxyPort}`;
     proxyOptions.headers['x-forwarded-for'] = req.ip;
     proxyOptions.headers['x-forwarded-proto'] = req.protocol;
     proxyOptions.headers['x-real-ip'] = req.ip;
+    proxyOptions.headers['x-forwarded-host'] = req.headers.host;
+    proxyOptions.headers['x-forwarded-prefix'] = `/s/${serverId}`;
     
-    const proxyReq = https.request(proxyOptions, (proxyRes) => {
+    const transport = isHttps ? https : http;
+    
+    const proxyReq = transport.request(proxyOptions, (proxyRes) => {
+        // Rewrite location headers for redirects
+        const location = proxyRes.headers['location'];
+        if (location && location.startsWith('/')) {
+            proxyRes.headers['location'] = `/s/${serverId}${location}`;
+        }
+        
         res.writeHead(proxyRes.statusCode, proxyRes.headers);
         proxyRes.pipe(res);
     });
     
     proxyReq.on('error', (err) => {
         if (!res.headersSent) {
-            res.status(502).send(`<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>The VM is not responding on port 443.</p><p>${err.message}</p></body></html>`);
+            res.status(502).send(`<!DOCTYPE html>
+<html><head><title>502 Bad Gateway</title>
+<style>body{font-family:system-ui;max-width:600px;margin:50px auto;padding:20px;text-align:center}
+h1{color:#e74c3c}pre{background:#f1f1f1;padding:10px;border-radius:4px;text-align:left;overflow:auto}</style></head>
+<body><h1>502 Bad Gateway</h1>
+<p>The VM is not responding on port ${isHttps ? 443 : 80}.</p>
+<pre>${err.message}</pre>
+<button onclick="location.reload()">Retry</button>
+</body></html>`);
         }
     });
     
     req.pipe(proxyReq);
+}
+
+app.all('/s/:serverId/*', async (req, res) => {
+    await proxyToVm(req, res, req.params.serverId);
 });
 
-app.get('/s/:serverId', async (req, res) => {
-    res.redirect(`/s/${req.params.serverId}/`);
+app.all('/s/:serverId', async (req, res) => {
+    // Redirect to trailing slash version
+    res.redirect(301, `/s/${req.params.serverId}/`);
 });
 
 // =====================
