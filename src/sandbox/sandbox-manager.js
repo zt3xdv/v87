@@ -888,9 +888,11 @@ local-hostname: v87-vm
         
         // Try to get port from QMP info
         try {
-            const netInfo = await this.qmpCommand(serverId, 'human-monitor-command', 
+            const result = await this.qmpCommand(serverId, 'human-monitor-command', 
                 { 'command-line': 'info usernet' });
             
+            // QMP returns { return: "output string" }
+            const netInfo = typeof result === 'string' ? result : (result?.return || result?.['return'] || '');
             console.log(`[DEBUG] info usernet for ${serverId}:`, JSON.stringify(netInfo));
             
             // Parse output to find hostfwd port
