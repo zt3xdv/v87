@@ -891,37 +891,40 @@ local-hostname: v87-vm
             const netInfo = await this.qmpCommand(serverId, 'human-monitor-command', 
                 { 'command-line': 'info usernet' });
             
+            console.log(`[DEBUG] info usernet for ${serverId}:`, JSON.stringify(netInfo));
+            
             // Parse output to find hostfwd port
-            // Format: "TCP[HOST_FORWARD] 127.0.0.1:XXXXX -> 10.0.2.15:443"
-            // or: "HOST_FORWARD 127.0.0.1 XXXXX 10.0.2.15 443"
             const lines = netInfo.split('\n');
             for (const line of lines) {
-                // Match format: TCP[HOST_FORWARD] host:port -> guest:targetPort
-                const match1 = line.match(/TCP.*HOST_FORWARD.*?127\.0\.0\.1[:\s]+(\d+).*?[:\s]+(\d+)\s*$/);
-                if (match1 && parseInt(match1[2]) === targetPort) {
-                    const port = parseInt(match1[1]);
-                    serverInfo[cacheKey] = port;
-                    return port;
+                console.log(`[DEBUG] Parsing line: ${line}`);
+                
+                // Format: "TCP[HOST_FORWARD] 127.0.0.1 45678 10.0.2.15 443"
+                // or: "  TCP HOST_FORWARD 0 127.0.0.1 45678 10.0.2.15 443"
+                const parts = line.trim().split(/\s+/);
+                for (let i = 0; i < parts.length - 1; i++) {
+                    const hostPort = parseInt(parts[i]);
+                    const guestPort = parseInt(parts[i + 1]);
+                    if (!isNaN(hostPort) && guestPort === targetPort && hostPort > 1024) {
+                        console.log(`[DEBUG] Found port mapping: ${hostPort} -> ${targetPort}`);
+                        serverInfo[cacheKey] = hostPort;
+                        return hostPort;
+                    }
                 }
                 
-                // Alternative format with arrow
-                const match2 = line.match(/127\.0\.0\.1:(\d+)\s*->\s*[\d\.]+:(\d+)/);
-                if (match2 && parseInt(match2[2]) === targetPort) {
-                    const port = parseInt(match2[1]);
-                    serverInfo[cacheKey] = port;
-                    return port;
-                }
-                
-                // Simple format: just find port -> targetPort pattern
-                const match3 = line.match(/:(\d+)\s*(?:->|to)\s*.*?:(\d+)/i);
-                if (match3 && parseInt(match3[2]) === targetPort) {
-                    const port = parseInt(match3[1]);
-                    serverInfo[cacheKey] = port;
-                    return port;
+                // Alternative: "127.0.0.1:45678 -> 10.0.2.15:443"
+                const match = line.match(/127\.0\.0\.1:(\d+).*?(\d+)\s*$/);
+                if (match) {
+                    const hostPort = parseInt(match[1]);
+                    const guestPort = parseInt(match[2]);
+                    if (guestPort === targetPort) {
+                        console.log(`[DEBUG] Found port mapping (regex): ${hostPort} -> ${targetPort}`);
+                        serverInfo[cacheKey] = hostPort;
+                        return hostPort;
+                    }
                 }
             }
         } catch (err) {
-            // QMP command failed
+            console.log(`[DEBUG] QMP error:`, err.message);
         }
         
         return null;
