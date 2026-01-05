@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { generateToken, verifyToken } from './utils/token.js';
-import { requireAuth, requireAdmin } from './utils/authMiddleware.js';
+import { requireAuth, requireAdmin, invalidateUserTokens } from './utils/authMiddleware.js';
 import { SandboxManager } from '../sandbox/sandbox-manager.js';
 import { getImages, getImage } from '../sandbox/images.js';
 
@@ -364,8 +364,18 @@ app.post('/api/register', (req, res) => {
     res.json({ success: true, user: { id: user.id, username: user.username, role: user.role }, token });
 });
 
-app.post('/api/logout', (req, res) => {
+app.post('/api/logout', requireAuth, (req, res) => {
+    // Invalidate all tokens for this user
+    invalidateUserTokens(req.user.id);
+    audit(req.user.id, req.user.username, 'logout');
     res.json({ success: true });
+});
+
+app.post('/api/revoke-tokens', requireAuth, (req, res) => {
+    // Invalidate all sessions/tokens for current user
+    invalidateUserTokens(req.user.id);
+    audit(req.user.id, req.user.username, 'tokens_revoked');
+    res.json({ success: true, message: 'All sessions have been logged out' });
 });
 
 // =====================
@@ -1103,6 +1113,19 @@ app.delete('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
     } catch (err) {
         next(err);
     }
+});
+
+app.post('/api/admin/user/:id/revoke-tokens', requireAdmin, (req, res) => {
+    const user = db.findUserById(req.params.id);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+    
+    invalidateUserTokens(req.params.id);
+    audit(req.user.id, req.user.username, 'admin_revoke_tokens', { targetUser: user.username });
+    log(`Admin ${req.user.username} revoked all tokens for user ${user.username}`);
+    
+    res.json({ success: true, message: `All sessions for ${user.username} have been logged out` });
 });
 
 // =====================
