@@ -1,3 +1,132 @@
+const Dialog = {
+    container: null,
+    
+    init() {
+        if (this.container) return;
+        this.container = document.createElement('div');
+        this.container.id = 'dialog-container';
+        document.body.appendChild(this.container);
+    },
+    
+    _create(type, title, message, options = {}) {
+        this.init();
+        
+        return new Promise((resolve) => {
+            const icons = {
+                alert: { icon: 'info', class: 'info' },
+                success: { icon: 'check_circle', class: 'success' },
+                warning: { icon: 'warning', class: 'warning' },
+                confirm: { icon: 'help', class: 'warning' },
+                prompt: { icon: 'edit', class: 'prompt' }
+            };
+            
+            const iconData = icons[type] || icons.alert;
+            const isPrompt = type === 'prompt';
+            const isConfirm = type === 'confirm';
+            const isDanger = options.danger;
+            
+            const overlay = document.createElement('div');
+            overlay.className = 'dialog-overlay';
+            overlay.innerHTML = `
+                <div class="dialog-box">
+                    <div class="dialog-header">
+                        <div class="dialog-icon ${iconData.class}">
+                            <span class="material-symbols-outlined">${iconData.icon}</span>
+                        </div>
+                        <h3 class="dialog-title">${title}</h3>
+                    </div>
+                    <div class="dialog-body">
+                        <p class="dialog-message">${message}</p>
+                        ${isPrompt ? `<input type="text" class="dialog-input" value="${options.defaultValue || ''}" placeholder="${options.placeholder || ''}">` : ''}
+                    </div>
+                    <div class="dialog-footer">
+                        ${(isConfirm || isPrompt) ? `<button class="dialog-btn dialog-btn-cancel">${options.cancelText || 'Cancel'}</button>` : ''}
+                        <button class="dialog-btn ${isDanger ? 'dialog-btn-danger' : 'dialog-btn-confirm'}">${options.confirmText || 'OK'}</button>
+                    </div>
+                </div>
+            `;
+            
+            this.container.appendChild(overlay);
+            
+            requestAnimationFrame(() => overlay.classList.add('active'));
+            
+            const input = overlay.querySelector('.dialog-input');
+            const confirmBtn = overlay.querySelector('.dialog-btn-confirm, .dialog-btn-danger');
+            const cancelBtn = overlay.querySelector('.dialog-btn-cancel');
+            
+            if (input) {
+                input.focus();
+                input.select();
+            } else {
+                confirmBtn.focus();
+            }
+            
+            const close = (result) => {
+                overlay.classList.remove('active');
+                setTimeout(() => overlay.remove(), 200);
+                resolve(result);
+            };
+            
+            confirmBtn.onclick = () => {
+                if (isPrompt) {
+                    close(input.value);
+                } else if (isConfirm) {
+                    close(true);
+                } else {
+                    close(undefined);
+                }
+            };
+            
+            if (cancelBtn) {
+                cancelBtn.onclick = () => close(isPrompt ? null : false);
+            }
+            
+            overlay.onclick = (e) => {
+                if (e.target === overlay && (isConfirm || isPrompt)) {
+                    close(isPrompt ? null : false);
+                }
+            };
+            
+            if (input) {
+                input.onkeydown = (e) => {
+                    if (e.key === 'Enter') confirmBtn.click();
+                    if (e.key === 'Escape') cancelBtn?.click();
+                };
+            }
+            
+            overlay.onkeydown = (e) => {
+                if (e.key === 'Escape') {
+                    if (isConfirm || isPrompt) {
+                        close(isPrompt ? null : false);
+                    } else {
+                        close(undefined);
+                    }
+                }
+            };
+        });
+    },
+    
+    alert(message, title = 'Notice', options = {}) {
+        return this._create('alert', title, message, options);
+    },
+    
+    success(message, title = 'Success', options = {}) {
+        return this._create('success', title, message, options);
+    },
+    
+    warning(message, title = 'Warning', options = {}) {
+        return this._create('warning', title, message, options);
+    },
+    
+    confirm(message, title = 'Confirm', options = {}) {
+        return this._create('confirm', title, message, options);
+    },
+    
+    prompt(message, title = 'Input', options = {}) {
+        return this._create('prompt', title, message, options);
+    }
+};
+
 const App = {
     user: null,
     currentServerId: null,
@@ -511,11 +640,11 @@ const App = {
                     updateStatus(true);
                 } else {
                     const d = await r.json();
-                    alert('Error: ' + d.error);
+                    await Dialog.warning('Error: ' + d.error);
                     btnStart.disabled = false;
                 }
             } catch (e) {
-                alert('Error starting VM');
+                await Dialog.warning('Error starting VM');
                 btnStart.disabled = false;
             }
             btnStart.textContent = 'Start';
@@ -787,9 +916,11 @@ const App = {
         
         document.getElementById('btn-reinstall').onclick = async () => {
             if (isRunning) {
-                return alert('Please stop the VM first');
+                await Dialog.warning('Please stop the VM first');
+                return;
             }
-            if (!confirm('Reinstall VM? This will delete all data on the disk!')) return;
+            const confirmed = await Dialog.confirm('Reinstall VM? This will delete all data on the disk!', 'Reinstall VM', { danger: true, confirmText: 'Reinstall' });
+            if (!confirmed) return;
             
             const btn = document.getElementById('btn-reinstall');
             btn.disabled = true;
@@ -804,7 +935,7 @@ const App = {
                 App.navigate(`/server/${id}/creating`);
             } else {
                 const data = await res.json();
-                alert('Error: ' + data.error);
+                await Dialog.warning('Error: ' + data.error);
                 btn.disabled = false;
                 btn.innerHTML = '<span class="material-symbols-outlined icon-sm">refresh</span> Reinstall VM';
             }
@@ -812,9 +943,11 @@ const App = {
         
         document.getElementById('btn-delete-vm').onclick = async () => {
             if (isRunning) {
-                return alert('Please stop the VM first');
+                await Dialog.warning('Please stop the VM first');
+                return;
             }
-            if (!confirm(`Delete VM ${server.name}? This cannot be undone!`)) return;
+            const confirmed = await Dialog.confirm(`Delete VM ${server.name}? This cannot be undone!`, 'Delete VM', { danger: true, confirmText: 'Delete' });
+            if (!confirmed) return;
             
             await fetch(`/api/server/${id}`, {
                 method: 'DELETE',
@@ -1231,7 +1364,8 @@ const App = {
         };
         
         document.getElementById('btn-stop-all').onclick = async () => {
-            if (!confirm('Stop ALL running VMs? This will force stop every VM.')) return;
+            const confirmed = await Dialog.confirm('Stop ALL running VMs? This will force stop every VM.', 'Stop All VMs', { danger: true, confirmText: 'Stop All' });
+            if (!confirmed) return;
             
             const btn = document.getElementById('btn-stop-all');
             btn.disabled = true;
@@ -1401,20 +1535,22 @@ const App = {
                 
                 list.querySelectorAll('.btn-restore').forEach(btn => {
                     btn.onclick = async () => {
-                        if (!confirm('Restore this snapshot? Current state will be lost.')) return;
+                        const confirmed = await Dialog.confirm('Restore this snapshot? Current state will be lost.', 'Restore Snapshot', { danger: true, confirmText: 'Restore' });
+                        if (!confirmed) return;
                         btn.disabled = true;
                         await fetch(`/api/server/${id}/snapshots/${btn.dataset.id}/restore`, {
                             method: 'POST',
                             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                         });
                         btn.disabled = false;
-                        alert('Snapshot restored');
+                        await Dialog.success('Snapshot restored successfully');
                     };
                 });
                 
                 list.querySelectorAll('.btn-delete-snap').forEach(btn => {
                     btn.onclick = async () => {
-                        if (!confirm('Delete this snapshot?')) return;
+                        const confirmed = await Dialog.confirm('Delete this snapshot?', 'Delete Snapshot', { danger: true, confirmText: 'Delete' });
+                        if (!confirmed) return;
                         await fetch(`/api/server/${id}/snapshots/${btn.dataset.id}`, {
                             method: 'DELETE',
                             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -1430,7 +1566,8 @@ const App = {
         await loadSnapshots();
         
         document.getElementById('btn-create-snapshot').onclick = async () => {
-            const name = prompt('Snapshot name (optional):');
+            const name = await Dialog.prompt('Enter a name for this snapshot', 'Create Snapshot', { placeholder: 'Snapshot name (optional)' });
+            if (name === null) return;
             const btn = document.getElementById('btn-create-snapshot');
             btn.disabled = true;
             btn.textContent = 'Creating...';
@@ -1443,7 +1580,7 @@ const App = {
             
             if (!res.ok) {
                 const data = await res.json();
-                alert('Error: ' + data.error);
+                await Dialog.warning('Error: ' + data.error);
             }
             
             btn.disabled = false;
@@ -1480,7 +1617,8 @@ const App = {
                 
                 list.querySelectorAll('.btn-delete-sched').forEach(btn => {
                     btn.onclick = async () => {
-                        if (!confirm('Delete this schedule?')) return;
+                        const confirmed = await Dialog.confirm('Delete this schedule?', 'Delete Schedule', { danger: true, confirmText: 'Delete' });
+                        if (!confirmed) return;
                         await fetch(`/api/server/${id}/schedules/${btn.dataset.id}`, {
                             method: 'DELETE',
                             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -1573,7 +1711,8 @@ const App = {
                 
                 list.querySelectorAll('.btn-delete-key').forEach(btn => {
                     btn.onclick = async () => {
-                        if (!confirm('Delete this API key?')) return;
+                        const confirmed = await Dialog.confirm('Delete this API key?', 'Delete API Key', { danger: true, confirmText: 'Delete' });
+                        if (!confirmed) return;
                         await fetch(`/api/keys/${btn.dataset.id}`, {
                             method: 'DELETE',
                             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -1666,16 +1805,17 @@ const App = {
                         btn.innerHTML = '<span class="material-symbols-outlined icon-sm">send</span>';
                         
                         if (data.success) {
-                            alert('Webhook test successful!');
+                            await Dialog.success('Webhook test successful!');
                         } else {
-                            alert('Webhook test failed: ' + (data.error || 'Unknown error'));
+                            await Dialog.warning('Webhook test failed: ' + (data.error || 'Unknown error'));
                         }
                     };
                 });
                 
                 list.querySelectorAll('.btn-delete-wh').forEach(btn => {
                     btn.onclick = async () => {
-                        if (!confirm('Delete this webhook?')) return;
+                        const confirmed = await Dialog.confirm('Delete this webhook?', 'Delete Webhook', { danger: true, confirmText: 'Delete' });
+                        if (!confirmed) return;
                         await fetch(`/api/webhooks/${btn.dataset.id}`, {
                             method: 'DELETE',
                             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -1704,8 +1844,8 @@ const App = {
             const secret = document.getElementById('wh-secret').value;
             const events = Array.from(document.querySelectorAll('.wh-event:checked')).map(c => c.value);
             
-            if (!url) return alert('URL is required');
-            if (events.length === 0) return alert('Select at least one event');
+            if (!url) { await Dialog.warning('URL is required'); return; }
+            if (events.length === 0) { await Dialog.warning('Select at least one event'); return; }
             
             await fetch('/api/webhooks', {
                 method: 'POST',
@@ -1759,7 +1899,8 @@ const App = {
         
         // Security - Revoke all sessions
         document.getElementById('btn-revoke-all-sessions').onclick = async () => {
-            if (!confirm('This will log you out from all devices. Continue?')) return;
+            const confirmed = await Dialog.confirm('This will log you out from all devices. Continue?', 'Logout All Sessions', { danger: true, confirmText: 'Logout All' });
+            if (!confirmed) return;
             
             const btn = document.getElementById('btn-revoke-all-sessions');
             btn.disabled = true;
@@ -1825,7 +1966,7 @@ const App = {
         const r = await fetch(`/api/admin/user/${userId}`, {
             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         });
-        if (!r.ok) return alert('Failed to load user');
+        if (!r.ok) { await Dialog.warning('Failed to load user'); return; }
         const user = await r.json();
         
         const tmpl = document.getElementById('user-edit-template').content.cloneNode(true);
@@ -1863,7 +2004,8 @@ const App = {
         document.getElementById('btn-close-user-edit').onclick = () => overlay.remove();
         
         document.getElementById('btn-revoke-tokens').onclick = async () => {
-            if (!confirm(`Logout all sessions for ${user.username}?`)) return;
+            const confirmed = await Dialog.confirm(`Logout all sessions for ${user.username}?`, 'Logout Sessions', { danger: true, confirmText: 'Logout All' });
+            if (!confirmed) return;
             
             const btn = document.getElementById('btn-revoke-tokens');
             btn.disabled = true;
@@ -1881,12 +2023,13 @@ const App = {
                 setTimeout(() => document.getElementById('user-edit-success').classList.add('hidden'), 2000);
             } else {
                 const data = await res.json();
-                alert('Error: ' + data.error);
+                await Dialog.warning('Error: ' + data.error);
             }
         };
         
         document.getElementById('btn-delete-user').onclick = async () => {
-            if (!confirm(`Delete user ${user.username}? This will delete all their VMs!`)) return;
+            const confirmed = await Dialog.confirm(`Delete user ${user.username}? This will delete all their VMs!`, 'Delete User', { danger: true, confirmText: 'Delete' });
+            if (!confirmed) return;
             
             const dr = await fetch(`/api/admin/user/${userId}`, {
                 method: 'DELETE',
@@ -1898,7 +2041,7 @@ const App = {
                 onSave();
             } else {
                 const data = await dr.json();
-                alert('Error: ' + data.error);
+                await Dialog.warning('Error: ' + data.error);
             }
         };
         
@@ -1975,7 +2118,8 @@ const App = {
         document.getElementById('btn-close-server-edit').onclick = () => overlay.remove();
         
         document.getElementById('btn-force-stop').onclick = async () => {
-            if (!confirm('Force stop this VM?')) return;
+            const confirmed = await Dialog.confirm('Force stop this VM?', 'Force Stop', { danger: true, confirmText: 'Force Stop' });
+            if (!confirmed) return;
             
             await fetch(`/api/admin/server/${server.id}/force-stop`, {
                 method: 'POST',
@@ -1988,9 +2132,11 @@ const App = {
         
         document.getElementById('btn-reinstall-admin').onclick = async () => {
             if (server.status === 'running') {
-                return alert('Stop the VM first');
+                await Dialog.warning('Stop the VM first');
+                return;
             }
-            if (!confirm(`Reinstall ${server.name}? This will delete all disk data!`)) return;
+            const confirmed = await Dialog.confirm(`Reinstall ${server.name}? This will delete all disk data!`, 'Reinstall VM', { danger: true, confirmText: 'Reinstall' });
+            if (!confirmed) return;
             
             await fetch(`/api/admin/server/${server.id}/reinstall`, {
                 method: 'POST',
@@ -2002,7 +2148,8 @@ const App = {
         };
         
         document.getElementById('btn-delete-server-admin').onclick = async () => {
-            if (!confirm(`Delete VM ${server.name}? This cannot be undone!`)) return;
+            const confirmed = await Dialog.confirm(`Delete VM ${server.name}? This cannot be undone!`, 'Delete VM', { danger: true, confirmText: 'Delete' });
+            if (!confirmed) return;
             
             const dr = await fetch(`/api/admin/server/${server.id}`, {
                 method: 'DELETE',
@@ -2014,7 +2161,7 @@ const App = {
                 onSave();
             } else {
                 const data = await dr.json();
-                alert('Error: ' + data.error);
+                await Dialog.warning('Error: ' + data.error);
             }
         };
         
