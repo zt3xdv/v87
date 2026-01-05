@@ -463,12 +463,26 @@ app.get('/api/server/:id', requireAuth, async (req, res) => {
     
     const image = getImage(serverData.imageId);
     
+    // Read credentials from metadata
+    let credentials = null;
+    try {
+        const metadataPath = path.join(DATA_DIR, 'users', serverData.ownerId, serverData.id, 'metadata.json');
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        if (metadata.password) {
+            credentials = {
+                user: metadata.defaultUser || 'root',
+                password: metadata.password
+            };
+        }
+    } catch {}
+
     res.json({ 
         server: {
             ...serverData,
             status: sandboxManager.getServerStatus(serverData.id)
         },
-        image: image ? { id: image.id, name: image.name, description: image.description } : null
+        image: image ? { id: image.id, name: image.name, description: image.description } : null,
+        credentials
     });
 });
 

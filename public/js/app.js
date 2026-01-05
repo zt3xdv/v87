@@ -464,7 +464,13 @@ const App = {
         document.getElementById('s-id').textContent = `ID: ${server.id}`;
         document.getElementById('s-image').textContent = data.image?.name || 'Unknown';
         
-
+        // Show credentials if available
+        if (data.credentials) {
+            document.getElementById('s-credentials').innerHTML = `
+                <strong>Login:</strong> ${data.credentials.user} / ${data.credentials.password}
+            `;
+            document.getElementById('s-credentials').classList.remove('hidden');
+        }
         
         const statusBadge = document.getElementById('s-status-badge');
         const btnStart = document.getElementById('btn-start');
