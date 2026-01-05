@@ -86,7 +86,8 @@ class VNCClient {
         });
         
         this.socket.on('vnc-data', (data) => {
-            this.handleData(new Uint8Array(data));
+            const bytes = Array.isArray(data) ? new Uint8Array(data) : new Uint8Array(data);
+            this.handleData(bytes);
         });
         
         this.socket.on('vnc-disconnected', () => {

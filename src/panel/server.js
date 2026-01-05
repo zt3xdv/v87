@@ -179,43 +179,43 @@ io.of('/vnc').on('connection', (socket) => {
     
     let vncSocket = null;
     
-    try {
-        vncSocket = net.createConnection(vncSocketPath);
-        
-        vncSocket.on('connect', () => {
-            socket.emit('vnc-connected');
-        });
-        
-        vncSocket.on('data', (data) => {
-            socket.emit('vnc-data', data);
-        });
-        
-        vncSocket.on('error', (err) => {
-            socket.emit('error', 'VNC connection error: ' + err.message);
-            socket.disconnect();
-        });
-        
-        vncSocket.on('close', () => {
-            socket.emit('vnc-disconnected');
-            socket.disconnect();
-        });
-        
-        socket.on('vnc-data', (data) => {
-            if (vncSocket && !vncSocket.destroyed) {
-                vncSocket.write(Buffer.from(data));
-            }
-        });
-        
-        socket.on('disconnect', () => {
-            if (vncSocket && !vncSocket.destroyed) {
-                vncSocket.destroy();
-            }
-        });
-        
-    } catch (err) {
-        socket.emit('error', 'Failed to connect to VNC: ' + err.message);
+    log(`VNC connecting to socket: ${vncSocketPath}`);
+    
+    vncSocket = net.createConnection(vncSocketPath);
+    
+    vncSocket.on('connect', () => {
+        log(`VNC socket connected for server: ${serverId}`);
+        socket.emit('vnc-connected');
+    });
+    
+    vncSocket.on('data', (data) => {
+        socket.emit('vnc-data', Array.from(data));
+    });
+    
+    vncSocket.on('error', (err) => {
+        log(`VNC socket error for ${serverId}: ${err.message}`);
+        socket.emit('error', 'VNC connection error: ' + err.message);
         socket.disconnect();
-    }
+    });
+    
+    vncSocket.on('close', () => {
+        log(`VNC socket closed for server: ${serverId}`);
+        socket.emit('vnc-disconnected');
+        socket.disconnect();
+    });
+    
+    socket.on('vnc-data', (data) => {
+        if (vncSocket && !vncSocket.destroyed) {
+            vncSocket.write(Buffer.from(data));
+        }
+    });
+    
+    socket.on('disconnect', () => {
+        log(`VNC client disconnected for server: ${serverId}`);
+        if (vncSocket && !vncSocket.destroyed) {
+            vncSocket.destroy();
+        }
+    });
 });
 
 sandboxManager.on('log', (serverId, data) => {
