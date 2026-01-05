@@ -2253,16 +2253,13 @@ async function proxyToVm(req, res, serverId, useHttps = true) {
     }
     
     // Get proxy port - try HTTPS (443) first, then HTTP (80)
-    let proxyPort = null;
+    let proxyPort = sandboxManager.getVmProxyPort(serverId, 443);
     let isHttps = useHttps;
     
-    try {
-        proxyPort = await sandboxManager.getVmProxyPort(serverId, 443);
-        if (!proxyPort) {
-            proxyPort = await sandboxManager.getVmProxyPort(serverId, 80);
-            isHttps = false;
-        }
-    } catch {}
+    if (!proxyPort) {
+        proxyPort = sandboxManager.getVmProxyPort(serverId, 80);
+        isHttps = false;
+    }
     
     if (!proxyPort) {
         return res.status(503).send(`<!DOCTYPE html>

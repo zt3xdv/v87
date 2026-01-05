@@ -530,11 +530,17 @@ local-hostname: v87-vm
             await fs.unlink(vncSocketPath);
         } catch {}
         
+        // Generate deterministic ports based on serverId hash (range 10000-60000)
+        const hash = serverId.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+        const basePort = 10000 + Math.abs(hash % 50000);
+        const port443 = basePort;
+        const port80 = basePort + 1;
+        
         const qemuArgs = [
             '-m', `${ram}`,
             ...cpuArgs,
             '-drive', `file=${diskPath},format=qcow2,if=virtio${ioLimit > 0 ? `,throttling.bps-total=${ioLimit * 1024 * 1024}` : ''}`,
-            '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:0-:443,hostfwd=tcp:127.0.0.1:0-:80`,
+            '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:${port443}-:443,hostfwd=tcp:127.0.0.1:${port80}-:80`,
             '-device', 'virtio-net-pci,netdev=net0',
             '-device', 'virtio-balloon-pci,id=balloon0',
             '-qmp', `unix:${qmpSocketPath},server,nowait`,
@@ -597,20 +603,11 @@ local-hostname: v87-vm
             qmpSocketPath,
             vncSocketPath,
             ram,
-            proxyPort: null
+            port443,
+            port80
         });
 
         this.serverStatus.set(serverId, 'running');
-
-        // Detect proxy port after 2 seconds
-        setTimeout(async () => {
-            try {
-                const port = await this.getVmProxyPort(serverId);
-                if (port) {
-                    this.setProxyPort(serverId, port);
-                }
-            } catch {}
-        }, 2000);
 
         if (this.options.timeout > 0) {
             setTimeout(() => {
@@ -876,64 +873,13 @@ local-hostname: v87-vm
         return stats;
     }
 
-    async getVmProxyPort(serverId, targetPort = 443) {
+    getVmProxyPort(serverId, targetPort = 443) {
         const serverInfo = this.processes.get(serverId);
         if (!serverInfo) return null;
         
-        // Check if we already cached the port
-        const cacheKey = `port_${targetPort}`;
-        if (serverInfo[cacheKey]) {
-            return serverInfo[cacheKey];
-        }
-        
-        // Try to get port from QMP info
-        try {
-            const result = await this.qmpCommand(serverId, 'human-monitor-command', 
-                { 'command-line': 'info usernet' });
-            
-            // QMP returns { return: "output string" }
-            const netInfo = typeof result === 'string' ? result : (result?.return || result?.['return'] || '');
-            console.log(`[DEBUG] info usernet for ${serverId}:`, JSON.stringify(netInfo));
-            
-            // Parse output to find hostfwd port
-            const lines = netInfo.split('\n');
-            for (const line of lines) {
-                console.log(`[DEBUG] Parsing line: ${line}`);
-                
-                // Format: "TCP[HOST_FORWARD] 127.0.0.1 45678 10.0.2.15 443"
-                // or: "  TCP HOST_FORWARD 0 127.0.0.1 45678 10.0.2.15 443"
-                const parts = line.trim().split(/\s+/);
-                for (let i = 0; i < parts.length - 1; i++) {
-                    const hostPort = parseInt(parts[i]);
-                    const guestPort = parseInt(parts[i + 1]);
-                    if (!isNaN(hostPort) && guestPort === targetPort && hostPort > 1024) {
-                        console.log(`[DEBUG] Found port mapping: ${hostPort} -> ${targetPort}`);
-                        serverInfo[cacheKey] = hostPort;
-                        return hostPort;
-                    }
-                }
-                
-                // Alternative: "127.0.0.1:45678 -> 10.0.2.15:443"
-                const match = line.match(/127\.0\.0\.1:(\d+).*?(\d+)\s*$/);
-                if (match) {
-                    const hostPort = parseInt(match[1]);
-                    const guestPort = parseInt(match[2]);
-                    if (guestPort === targetPort) {
-                        console.log(`[DEBUG] Found port mapping (regex): ${hostPort} -> ${targetPort}`);
-                        serverInfo[cacheKey] = hostPort;
-                        return hostPort;
-                    }
-                }
-            }
-        } catch (err) {
-            console.log(`[DEBUG] QMP error:`, err.message);
-        }
-        
+        if (targetPort === 443) return serverInfo.port443;
+        if (targetPort === 80) return serverInfo.port80;
         return null;
-    }
-    
-    async getVmProxyPort80(serverId) {
-        return this.getVmProxyPort(serverId, 80);
     }
 
     getProxyInfo(serverId) {
