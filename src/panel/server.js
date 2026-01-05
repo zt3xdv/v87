@@ -2330,13 +2330,12 @@ h1{color:#e74c3c}pre{background:#f1f1f1;padding:10px;border-radius:4px;text-alig
     req.pipe(proxyReq);
 }
 
-app.all('/s/:serverId/*', async (req, res) => {
+app.all('/s/:serverId/:path(*)', async (req, res) => {
     await proxyToVm(req, res, req.params.serverId);
 });
 
 app.all('/s/:serverId', async (req, res) => {
-    // Redirect to trailing slash version
-    res.redirect(301, `/s/${req.params.serverId}/`);
+    await proxyToVm(req, res, req.params.serverId);
 });
 
 // =====================
