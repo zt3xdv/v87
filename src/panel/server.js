@@ -2252,13 +2252,13 @@ async function proxyToVm(req, res, serverId, useHttps = true) {
         return res.status(503).json({ error: 'VM is not running' });
     }
     
-    // Get proxy port - try HTTPS (443) first, then HTTP (80)
-    let proxyPort = sandboxManager.getVmProxyPort(serverId, 443);
-    let isHttps = useHttps;
+    // Get proxy port - try HTTP (80) first, then HTTPS (443)
+    let proxyPort = sandboxManager.getVmProxyPort(serverId, 80);
+    let isHttps = false;
     
     if (!proxyPort) {
-        proxyPort = sandboxManager.getVmProxyPort(serverId, 80);
-        isHttps = false;
+        proxyPort = sandboxManager.getVmProxyPort(serverId, 443);
+        isHttps = true;
     }
     
     if (!proxyPort) {
