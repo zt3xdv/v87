@@ -357,6 +357,10 @@ const App = {
             
             document.getElementById('d-ram').textContent = data.stats.totalRam;
             document.getElementById('d-max-ram').textContent = data.stats.maxRam;
+            document.getElementById('d-cpu').textContent = data.stats.totalCpu;
+            document.getElementById('d-max-cpu').textContent = data.stats.maxCpu;
+            document.getElementById('d-disk').textContent = data.stats.totalDisk;
+            document.getElementById('d-max-disk').textContent = data.stats.maxDisk;
             document.getElementById('d-slots').textContent = data.stats.slotsUsed;
             document.getElementById('d-max-slots').textContent = data.stats.slotsMax;
 
@@ -460,13 +464,7 @@ const App = {
         document.getElementById('s-id').textContent = `ID: ${server.id}`;
         document.getElementById('s-image').textContent = data.image?.name || 'Unknown';
         
-        // Show credentials if available
-        if (data.credentials) {
-            document.getElementById('s-credentials').innerHTML = `
-                <strong>Login:</strong> ${data.credentials.user} / ${data.credentials.password}
-            `;
-            document.getElementById('s-credentials').classList.remove('hidden');
-        }
+
         
         const statusBadge = document.getElementById('s-status-badge');
         const btnStart = document.getElementById('btn-start');

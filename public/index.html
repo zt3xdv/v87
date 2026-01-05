@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/xterm.css" />
     <link rel="stylesheet" href="/css/style.css">
-    <link rel="stylesheet" href="/css/material/index.css">
+    <link rel="stylesheet" href="/css/material/outlined.css">
 </head>
 <body>
     <nav class="navbar">
@@ -141,11 +141,19 @@
             <div class="card-body">
                 <div class="stat-item">
                     <span>RAM</span>
-                    <span><span id="d-ram">0</span> / <span id="d-max-ram">2048</span> MB</span>
+                    <span><span id="d-ram">0</span> / <span id="d-max-ram"></span> MB</span>
+                </div>
+                <div class="stat-item">
+                    <span>CPU</span>
+                    <span><span id="d-cpu">0</span> / <span id="d-max-cpu"></span>%</span>
+                </div>
+                <div class="stat-item">
+                    <span>Disk</span>
+                    <span><span id="d-disk">0</span> / <span id="d-max-disk"></span> GB</span>
                 </div>
                 <div class="stat-item">
                     <span>Slots</span>
-                    <span><span id="d-slots">0</span> / <span id="d-max-slots">3</span></span>
+                    <span><span id="d-slots">0</span> / <span id="d-max-slots"></span></span>
                 </div>
             </div>
         </div>
@@ -237,7 +245,7 @@
                 <div class="text-muted text-sm">
                     <span id="s-id"></span> • <span id="s-image"></span>
                 </div>
-                <div id="s-credentials" class="text-sm mt-2 hidden" style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 6px; font-family: monospace;"></div>
+
             </div>
             <div class="d-flex gap-2 align-center">
                 <span class="badge" id="s-status-badge">STOPPED</span>

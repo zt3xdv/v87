@@ -7,8 +7,8 @@ let config;
 try {
     config = require('../../../config.json');
 } catch (e) {
-    config = { secretKey: 'v87-fallback-secret' };
-    console.warn('Warning: config.json not found or invalid, using fallback secret.');
+    // let server say it
+    config = { secretKey: '' };
 }
 
 const SECRET_KEY = config.secretKey;

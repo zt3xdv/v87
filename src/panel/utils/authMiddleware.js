@@ -1,6 +1,6 @@
 import { verifyToken } from './token.js';
 
-function requireAuth(req, res, next) {
+function requireAuth(req, res, next, admin = false) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -14,10 +14,13 @@ function requireAuth(req, res, next) {
     }
 
     req.user = user;
-    next();
+    if (!admin) next();
 }
 
 function requireAdmin(req, res, next) {
+    // We should define req.user before require admin
+    requireAuth(req, res, next, true);
+    
     if (!req.user || req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Admin access required' });
     }

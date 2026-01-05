@@ -153,46 +153,37 @@ export class SandboxManager extends EventEmitter {
         return path.join(CACHE_PATH, `${imageId}.qcow2`);
     }
 
-    generatePassword(length = 12) {
-        const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        const bytes = crypto.randomBytes(length);
-        let password = '';
-        for (let i = 0; i < length; i++) {
-            password += chars[bytes[i] % chars.length];
-        }
-        return password;
-    }
 
-    async createCloudInit(serverPath, password, defaultUser = 'root') {
+
+    async createCloudInit(serverPath, defaultUser = 'root') {
         const ciDir = path.join(serverPath, 'cloud-init');
         await fs.mkdir(ciDir, { recursive: true });
 
-        // Configure both root and default user with same password
+        // Configure passwordless login
         const userData = `#cloud-config
 users:
   - name: root
     lock_passwd: false
-    plain_text_passwd: ${password}
     shell: /bin/bash
   - name: ${defaultUser}
     lock_passwd: false
-    plain_text_passwd: ${password}
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: sudo, wheel
-
-chpasswd:
-  expire: false
-  list: |
-    root:${password}
-    ${defaultUser}:${password}
 
 ssh_pwauth: true
 disable_root: false
 
 runcmd:
-  - echo "root:${password}" | chpasswd
-  - echo "${defaultUser}:${password}" | chpasswd 2>/dev/null || true
+  - passwd -d root
+  - passwd -d ${defaultUser} 2>/dev/null || true
+  - sed -i 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords yes/' /etc/ssh/sshd_config
+  - sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+  - sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+  - systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
+  - mkdir -p /etc/systemd/system/getty@tty1.service.d
+  - echo -e "[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin root --noclear %I \\$TERM" > /etc/systemd/system/getty@tty1.service.d/autologin.conf
+  - systemctl daemon-reload 2>/dev/null || true
 `;
 
         const metaData = `instance-id: v87-${Date.now()}
@@ -432,13 +423,10 @@ local-hostname: v87-vm
         }
 
         this.emit('creation-progress', serverId, { percent: 90, status: 'Finalizing...' });
-
-        // Generate random password
-        const password = this.generatePassword();
         
-        // Create cloud-init config
+        // Create cloud-init config (passwordless login)
         this.emit('creation-progress', serverId, { percent: 85, status: 'Configuring VM...' });
-        await this.createCloudInit(serverPath, password, image.defaultUser);
+        await this.createCloudInit(serverPath, image.defaultUser);
 
         const metadata = {
             userId,
@@ -450,8 +438,7 @@ local-hostname: v87-vm
             cpuCores: options.cpuCores || this.options.cpuCores,
             cpuLimit: options.cpuLimit || 100,
             ioLimit: options.ioLimit || 0,
-            defaultUser: image.defaultUser,
-            password: password
+            defaultUser: image.defaultUser
         };
 
         await fs.writeFile(

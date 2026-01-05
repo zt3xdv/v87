@@ -1,6 +1,3 @@
-// Imágenes cloud qcow2 precompiladas - descarga directa
-// No requiere libguestfs/virt-builder
-
 export const VM_IMAGES = {
     'debian-13': {
         id: 'debian-13',
@@ -26,24 +23,24 @@ export const VM_IMAGES = {
         defaultUser: 'root',
         defaultSize: '2G'
     },
-    'ubuntu-24.04': {
-        id: 'ubuntu-24.04',
+    'ubuntu-24-04': {
+        id: 'ubuntu-24-04',
         name: 'Ubuntu 24.04 LTS',
         description: 'Ubuntu Noble Numbat Cloud',
         url: 'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img',
         defaultUser: 'ubuntu',
         defaultSize: '2.5G'
     },
-    'ubuntu-22.04': {
-        id: 'ubuntu-22.04',
+    'ubuntu-22-04': {
+        id: 'ubuntu-22-04',
         name: 'Ubuntu 22.04 LTS',
         description: 'Ubuntu Jammy Jellyfish Cloud',
         url: 'https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img',
         defaultUser: 'ubuntu',
         defaultSize: '2.5G'
     },
-    'alpine-3.20': {
-        id: 'alpine-3.20',
+    'alpine-3-20': {
+        id: 'alpine-3-20',
         name: 'Alpine Linux 3.20',
         description: 'Alpine Linux Virtual',
         url: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2',

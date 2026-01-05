@@ -37,12 +37,8 @@ let config;
 try {
     config = require('../../config.json');
 } catch (e) {
-    config = { 
-        port: 3000,
-        limits: { maxServers: 3, maxRam: 2048, maxDisk: 50 },
-        vm: { defaultImage: 'fedora-40', defaultRam: 1024, defaultDisk: '10G' }
-    };
-    log('Warning: config.json not found, using defaults.');
+    log('Error: config.json not found.');
+    process.exit(1);
 }
 
 if (config.secretKey === 'v87-change-me-in-prod') {
@@ -57,12 +53,7 @@ const sandboxManager = new SandboxManager({
     enableKvm: config.vm?.enableKvm === true
 });
 
-let DATA_DIR = path.join(__dirname, '../../data');
-
-if (os.platform() === 'android') {
-    log('Running on android: using home path due to software limitations.');
-    DATA_DIR = path.join(os.homedir(), './v87/data');
-}
+const DATA_DIR = path.join(__dirname, '../../data');
 
 const app = express();
 const server = http.createServer(app);
@@ -472,26 +463,12 @@ app.get('/api/server/:id', requireAuth, async (req, res) => {
     
     const image = getImage(serverData.imageId);
     
-    // Read credentials from metadata
-    let credentials = null;
-    try {
-        const metadataPath = path.join(DATA_DIR, 'users', serverData.ownerId, serverData.id, 'metadata.json');
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
-        if (metadata.password) {
-            credentials = {
-                user: metadata.defaultUser || 'root',
-                password: metadata.password
-            };
-        }
-    } catch {}
-
     res.json({ 
         server: {
             ...serverData,
             status: sandboxManager.getServerStatus(serverData.id)
         },
-        image: image ? { id: image.id, name: image.name, description: image.description } : null,
-        credentials
+        image: image ? { id: image.id, name: image.name, description: image.description } : null
     });
 });
 
@@ -521,7 +498,6 @@ app.post('/api/server/:id/start', requireAuth, async (req, res, next) => {
         audit(req.user.id, req.user.username, 'vm_start', { serverId, serverName: serverData.name });
         triggerWebhooks('vm_start', { serverId, serverName: serverData.name, userId: req.user.id });
         res.json({ status: 'started' });
-        
     } catch (err) {
         next(err);
     }
