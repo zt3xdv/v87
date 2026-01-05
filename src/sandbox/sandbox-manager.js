@@ -534,7 +534,7 @@ local-hostname: v87-vm
             '-m', `${ram}`,
             ...cpuArgs,
             '-drive', `file=${diskPath},format=qcow2,if=virtio${ioLimit > 0 ? `,throttling.bps-total=${ioLimit * 1024 * 1024}` : ''}`,
-            '-netdev', 'user,id=net0',
+            '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:0-:443,hostfwd=tcp:127.0.0.1:0-:80`,
             '-device', 'virtio-net-pci,netdev=net0',
             '-device', 'virtio-balloon-pci,id=balloon0',
             '-qmp', `unix:${qmpSocketPath},server,nowait`,
@@ -596,10 +596,21 @@ local-hostname: v87-vm
             logHandle,
             qmpSocketPath,
             vncSocketPath,
-            ram
+            ram,
+            proxyPort: null
         });
 
         this.serverStatus.set(serverId, 'running');
+
+        // Detect proxy port after 2 seconds
+        setTimeout(async () => {
+            try {
+                const port = await this.getVmProxyPort(serverId);
+                if (port) {
+                    this.setProxyPort(serverId, port);
+                }
+            } catch {}
+        }, 2000);
 
         if (this.options.timeout > 0) {
             setTimeout(() => {
@@ -865,6 +876,41 @@ local-hostname: v87-vm
         return stats;
     }
 
+    async getVmProxyPort(serverId) {
+        const serverInfo = this.processes.get(serverId);
+        if (!serverInfo) return null;
+        
+        // Try to get port from QMP info
+        try {
+            const netInfo = await this.qmpCommand(serverId, 'human-monitor-command', 
+                { 'command-line': 'info usernet' });
+            
+            // Parse output to find hostfwd port for 443
+            const match = netInfo.match(/TCP\[HOST_FORWARD\].*?(\d+)\s*->\s*.*?:443/);
+            if (match) {
+                return parseInt(match[1]);
+            }
+        } catch {}
+        
+        return null;
+    }
+
+    getProxyInfo(serverId) {
+        const serverInfo = this.processes.get(serverId);
+        if (!serverInfo) return null;
+        return {
+            running: true,
+            proxyPort: serverInfo.proxyPort
+        };
+    }
+
+    setProxyPort(serverId, port) {
+        const serverInfo = this.processes.get(serverId);
+        if (serverInfo) {
+            serverInfo.proxyPort = port;
+        }
+    }
+
     shutdown() {
         for (const serverId of this.processes.keys()) {
             this.stopServer(serverId);
@@ -967,5 +1013,44 @@ local-hostname: v87-vm
         } catch {}
         
         return { deleted: true };
+    }
+
+    async resizeDisk(userId, serverId, newSizeGB) {
+        if (this.processes.has(serverId)) {
+            throw new Error('Stop the VM before resizing disk');
+        }
+        
+        const diskPath = this.getDiskPath(userId, serverId);
+        const newSize = `${newSizeGB}G`;
+        
+        const info = await this.execCommand('qemu-img', ['info', '--output=json', diskPath]);
+        const parsed = JSON.parse(info);
+        const currentSizeGB = Math.ceil(parsed['virtual-size'] / (1024 * 1024 * 1024));
+        
+        if (newSizeGB < currentSizeGB) {
+            throw new Error(`Cannot shrink disk. Current: ${currentSizeGB}GB, requested: ${newSizeGB}GB`);
+        }
+        
+        await this.execCommand('qemu-img', ['resize', diskPath, newSize]);
+        
+        const serverPath = this.getServerPath(userId, serverId);
+        const metadataPath = path.join(serverPath, 'metadata.json');
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        metadata.diskSize = newSize;
+        await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        
+        return { success: true, newSize, previousSize: `${currentSizeGB}G` };
+    }
+
+    async hotplugRam(serverId, newRamMB) {
+        const serverInfo = this.processes.get(serverId);
+        if (!serverInfo) {
+            throw new Error('VM must be running for RAM hotplug');
+        }
+        
+        const targetBytes = newRamMB * 1024 * 1024;
+        await this.qmpCommand(serverId, 'balloon', { value: targetBytes });
+        
+        return { success: true, requestedRam: newRamMB };
     }
 }

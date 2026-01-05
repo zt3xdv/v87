@@ -531,7 +531,22 @@
     <!-- VM CONSOLE -->
     <template id="server-console-template">
         <div class="card" style="border: none; background: transparent; box-shadow: none;">
-            <div id="terminal" style="height: 500px;"></div>
+            <div id="terminal" style="height: 400px;"></div>
+        </div>
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-between align-center">
+                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">cloud</span>
+                VM Info
+            </div>
+            <div class="card-body">
+                <div class="stat-item-2">
+                    <div class="stat-flex">
+                      <span>Server URL</span>
+                      <span id="server-url">-</span>
+                    </div>
+                    <p class="text-muted text-sm mb-3">This url is forwarding internal port 443 to the internet.</p>
+                </div>
+            </div>
         </div>
     </template>
     

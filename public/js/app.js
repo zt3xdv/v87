@@ -619,7 +619,7 @@ const App = {
         // Show credentials if available
         if (data.credentials) {
             document.getElementById('s-credentials').innerHTML = `
-                <strong>Login:</strong> ${data.credentials.user} / ${data.credentials.password}
+                <strong>User:</strong> ${data.credentials.user}<br><strong>Password:</strong> ${data.credentials.password}
             `;
             document.getElementById('s-credentials').classList.remove('hidden');
         }
@@ -638,7 +638,6 @@ const App = {
 
         btnStart.onclick = async () => {
             btnStart.disabled = true;
-            btnStart.textContent = 'Starting...';
             try {
                 const r = await fetch(`/api/server/${id}/start`, { 
                     method: 'POST',
@@ -655,18 +654,15 @@ const App = {
                 await Dialog.warning('Error starting VM');
                 btnStart.disabled = false;
             }
-            btnStart.textContent = 'Start';
         };
         
         btnStop.onclick = async () => {
             btnStop.disabled = true;
-            btnStop.textContent = 'Stopping...';
             await fetch(`/api/server/${id}/stop`, { 
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
             });
             updateStatus(false);
-            btnStop.textContent = 'Stop';
         };
 
         const tabConsole = document.getElementById('tab-console');
@@ -1095,6 +1091,8 @@ const App = {
         const tmpl = document.getElementById('server-console-template').content.cloneNode(true);
         container.innerHTML = '';
         container.appendChild(tmpl);
+        
+        container.querySelector("#server-url").innerHTML =  '<a href="/s/' + id + '/">/s/' + id + '/</a>';
 
         App.cleanupTerminal();
 

@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { Server } from 'socket.io';
 import path from 'node:path';
@@ -33,6 +34,38 @@ function log(message) {
     
     console.log(`${TERM_GRAY}${H}:${M}:${S} ${d}/${m}/${y} ${TERM_RESET}${message}`);
 }
+
+// Rate limiting store
+const rateLimitStore = new Map();
+
+function rateLimit(key, maxAttempts, windowMs) {
+    const now = Date.now();
+    const record = rateLimitStore.get(key) || { attempts: 0, resetAt: now + windowMs };
+    
+    if (now > record.resetAt) {
+        record.attempts = 0;
+        record.resetAt = now + windowMs;
+    }
+    
+    record.attempts++;
+    rateLimitStore.set(key, record);
+    
+    return {
+        allowed: record.attempts <= maxAttempts,
+        remaining: Math.max(0, maxAttempts - record.attempts),
+        resetAt: record.resetAt
+    };
+}
+
+// Clean up rate limit store every 5 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of rateLimitStore) {
+        if (now > record.resetAt + 60000) {
+            rateLimitStore.delete(key);
+        }
+    }
+}, 300000);
 
 let config;
 try {
@@ -396,6 +429,32 @@ app.get('/api/me', requireAuth, (req, res) => {
 
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    
+    // Rate limit by IP: 5 attempts per 15 minutes
+    const ipLimit = rateLimit(`login:ip:${ip}`, 5, 15 * 60 * 1000);
+    if (!ipLimit.allowed) {
+        const retryAfter = Math.ceil((ipLimit.resetAt - Date.now()) / 1000);
+        res.set('Retry-After', retryAfter);
+        return res.status(429).json({ 
+            error: 'Too many login attempts. Try again later.',
+            retryAfter 
+        });
+    }
+    
+    // Rate limit by username: 10 attempts per 15 minutes
+    if (username) {
+        const userLimit = rateLimit(`login:user:${username}`, 10, 15 * 60 * 1000);
+        if (!userLimit.allowed) {
+            const retryAfter = Math.ceil((userLimit.resetAt - Date.now()) / 1000);
+            res.set('Retry-After', retryAfter);
+            return res.status(429).json({ 
+                error: 'Too many login attempts for this account. Try again later.',
+                retryAfter 
+            });
+        }
+    }
+    
     const user = db.findUser(username);
     if (user && bcrypt.compareSync(password, user.password)) {
         if (user.suspended) {
@@ -406,11 +465,25 @@ app.post('/api/login', (req, res) => {
         const token = generateToken(user);
         res.json({ success: true, user: { id: user.id, username: user.username, role: user.role }, token });
     } else {
+        audit(null, username || 'unknown', 'login_failed');
         res.status(401).json({ error: 'Invalid credentials' });
     }
 });
 
 app.post('/api/register', (req, res) => {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    
+    // Rate limit registrations: 3 per hour per IP
+    const limit = rateLimit(`register:${ip}`, 3, 60 * 60 * 1000);
+    if (!limit.allowed) {
+        const retryAfter = Math.ceil((limit.resetAt - Date.now()) / 1000);
+        res.set('Retry-After', retryAfter);
+        return res.status(429).json({ 
+            error: 'Too many registration attempts. Try again later.',
+            retryAfter 
+        });
+    }
+
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
     if (username.length < 3 || username.length > 32) {
@@ -822,6 +895,108 @@ app.get('/api/server/:id/stats', requireAuth, async (req, res, next) => {
         
         const stats = await sandboxManager.getServerStats(serverData.id);
         res.json({ running: true, ...stats });
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/server/:id/resize-disk', requireAuth, async (req, res, next) => {
+    try {
+        const { newSizeGB } = req.body;
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        if (sandboxManager.getServerStatus(serverData.id) === 'running') {
+            return res.status(400).json({ error: 'Stop the VM before resizing disk' });
+        }
+        
+        const user = db.findUserById(serverData.ownerId);
+        const userLimits = getUserLimits(user);
+        const servers = db.getUserServers(user.id);
+        const otherDisk = servers.filter(s => s.id !== serverData.id)
+            .reduce((acc, s) => acc + parseInt((s.diskSize || '0G').replace('G', '')), 0);
+        
+        if (req.user.role !== 'admin' && (otherDisk + newSizeGB) > userLimits.maxDisk) {
+            return res.status(400).json({ error: `Exceeds disk quota. Available: ${userLimits.maxDisk - otherDisk}GB` });
+        }
+        
+        const result = await sandboxManager.resizeDisk(serverData.ownerId, serverData.id, newSizeGB);
+        db.updateServer(serverData.id, { diskSize: `${newSizeGB}G` });
+        audit(req.user.id, req.user.username, 'disk_resize', { serverId: serverData.id, newSize: newSizeGB });
+        
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/server/:id/hotplug-ram', requireAuth, async (req, res, next) => {
+    try {
+        const { newRamMB } = req.body;
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        if (sandboxManager.getServerStatus(serverData.id) !== 'running') {
+            return res.status(400).json({ error: 'VM must be running for RAM hotplug' });
+        }
+        
+        if (newRamMB > serverData.ram) {
+            return res.status(400).json({ error: `Cannot exceed configured RAM (${serverData.ram}MB). Change limits and restart.` });
+        }
+        
+        const result = await sandboxManager.hotplugRam(serverData.id, newRamMB);
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/api/server/:id/proxy', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        if (sandboxManager.getServerStatus(serverData.id) !== 'running') {
+            return res.json({ available: false, reason: 'VM not running' });
+        }
+        
+        const port = await sandboxManager.getVmProxyPort(serverData.id);
+        
+        res.json({
+            available: !!port,
+            url: port ? `/s/${serverData.id}/` : null,
+            internalPort: port
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/api/server/:id/metrics', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        const hours = parseInt(req.query.hours) || 1;
+        const metrics = db.getMetrics(req.params.id);
+        
+        // Filter by time range
+        const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+        const filtered = metrics.filter(m => new Date(m.timestamp) >= since);
+        
+        res.json({ metrics: filtered });
     } catch (err) {
         next(err);
     }
@@ -1641,6 +1816,100 @@ app.post('/api/webhooks/:id/test', requireAuth, async (req, res) => {
 });
 
 // =====================
+// SCHEDULES
+// =====================
+
+app.get('/api/schedules', requireAuth, (req, res) => {
+    const schedules = db.getUserSchedules(req.user.id);
+    const enriched = schedules.map(s => {
+        const server = db.getServer(s.serverId);
+        return { ...s, serverName: server?.name || 'Unknown' };
+    });
+    res.json(enriched);
+});
+
+app.get('/api/server/:id/schedules', requireAuth, (req, res) => {
+    const serverData = db.getServer(req.params.id);
+    if (!serverData) return res.status(404).json({ error: 'Server not found' });
+    if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const schedules = db.getServerSchedules(req.params.id);
+    res.json(schedules);
+});
+
+app.post('/api/server/:id/schedules', requireAuth, (req, res) => {
+    const { action, hour, minute, days, name } = req.body;
+    
+    const serverData = db.getServer(req.params.id);
+    if (!serverData) return res.status(404).json({ error: 'Server not found' });
+    if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    if (!['start', 'stop', 'restart'].includes(action)) {
+        return res.status(400).json({ error: 'Invalid action. Use: start, stop, restart' });
+    }
+    
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return res.status(400).json({ error: 'Invalid time' });
+    }
+    
+    if (!Array.isArray(days) || days.length === 0 || days.some(d => d < 0 || d > 6)) {
+        return res.status(400).json({ error: 'Invalid days. Use 0-6 (Sunday-Saturday)' });
+    }
+    
+    const schedule = {
+        id: Date.now().toString(),
+        userId: req.user.id,
+        serverId: req.params.id,
+        name: name || `${action} at ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`,
+        action,
+        hour: parseInt(hour),
+        minute: parseInt(minute),
+        days: days.map(d => parseInt(d)),
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        lastRun: null
+    };
+    
+    db.addSchedule(schedule);
+    audit(req.user.id, req.user.username, 'schedule_created', { scheduleId: schedule.id, serverId: req.params.id });
+    res.json({ success: true, schedule });
+});
+
+app.put('/api/schedules/:id', requireAuth, (req, res) => {
+    const { enabled, hour, minute, days } = req.body;
+    
+    const schedules = db.getUserSchedules(req.user.id);
+    const schedule = schedules.find(s => s.id === req.params.id);
+    if (!schedule) {
+        return res.status(404).json({ error: 'Schedule not found' });
+    }
+    
+    const updates = {};
+    if (typeof enabled === 'boolean') updates.enabled = enabled;
+    if (hour !== undefined) updates.hour = parseInt(hour);
+    if (minute !== undefined) updates.minute = parseInt(minute);
+    if (Array.isArray(days)) updates.days = days.map(d => parseInt(d));
+    
+    const updated = db.updateSchedule(req.params.id, updates);
+    res.json({ success: true, schedule: updated });
+});
+
+app.delete('/api/schedules/:id', requireAuth, (req, res) => {
+    const schedules = db.getUserSchedules(req.user.id);
+    const schedule = schedules.find(s => s.id === req.params.id);
+    if (!schedule) {
+        return res.status(404).json({ error: 'Schedule not found' });
+    }
+    
+    db.deleteSchedule(req.params.id);
+    res.json({ success: true });
+});
+
+// =====================
 // ALERTS
 // =====================
 
@@ -1711,6 +1980,89 @@ app.delete('/api/alerts/:id', requireAuth, (req, res) => {
     db.deleteAlert(req.params.id);
     res.json({ success: true });
 });
+
+// =====================
+// SCHEDULER - Runs every minute
+// =====================
+
+setInterval(async () => {
+    const now = new Date();
+    const currentDay = now.getDay(); // 0=Sunday, 1=Monday...
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    
+    const schedules = db.getSchedules();
+    
+    for (const schedule of schedules) {
+        if (!schedule.enabled) continue;
+        
+        // Check if it's time to run
+        const shouldRun = schedule.days.includes(currentDay) &&
+            schedule.hour === currentHour &&
+            schedule.minute === currentMinute;
+        
+        if (!shouldRun) continue;
+        
+        // Prevent running twice in the same minute
+        const lastRun = schedule.lastRun ? new Date(schedule.lastRun) : null;
+        if (lastRun && (now - lastRun) < 60000) continue;
+        
+        const server = db.getServer(schedule.serverId);
+        if (!server) {
+            db.deleteSchedule(schedule.id);
+            continue;
+        }
+        
+        const currentStatus = sandboxManager.getServerStatus(server.id);
+        
+        try {
+            if (schedule.action === 'start' && currentStatus !== 'running') {
+                await sandboxManager.startServer(server.ownerId, server.id);
+                db.updateServer(server.id, { status: 'running' });
+                log(`Scheduler: Started VM ${server.name} (${server.id})`);
+                audit('system', 'scheduler', 'scheduled_start', { serverId: server.id, scheduleId: schedule.id });
+            } else if (schedule.action === 'stop' && currentStatus === 'running') {
+                sandboxManager.stopServer(server.id);
+                db.updateServer(server.id, { status: 'stopped' });
+                log(`Scheduler: Stopped VM ${server.name} (${server.id})`);
+                audit('system', 'scheduler', 'scheduled_stop', { serverId: server.id, scheduleId: schedule.id });
+            } else if (schedule.action === 'restart' && currentStatus === 'running') {
+                sandboxManager.stopServer(server.id);
+                await new Promise(r => setTimeout(r, 3000));
+                await sandboxManager.startServer(server.ownerId, server.id);
+                db.updateServer(server.id, { status: 'running' });
+                log(`Scheduler: Restarted VM ${server.name} (${server.id})`);
+                audit('system', 'scheduler', 'scheduled_restart', { serverId: server.id, scheduleId: schedule.id });
+            }
+            
+            db.updateSchedule(schedule.id, { lastRun: now.toISOString() });
+        } catch (err) {
+            log(`Scheduler error for ${server.id}: ${err.message}`);
+        }
+    }
+}, 60000); // Every minute
+
+// =====================
+// METRICS COLLECTOR - Every minute
+// =====================
+
+setInterval(async () => {
+    const runningServers = sandboxManager.getRunningServers();
+    
+    for (const { serverId } of runningServers) {
+        try {
+            const stats = await sandboxManager.getServerStats(serverId);
+            if (stats) {
+                db.addMetric(serverId, {
+                    cpu: stats.cpuUsage || 0,
+                    memoryUsed: stats.memory?.actual || 0,
+                    memoryTotal: stats.memory?.configured || 0,
+                    uptime: stats.uptime || 0
+                });
+            }
+        } catch {}
+    }
+}, 60000);
 
 // Alert checker (runs every 30 seconds)
 setInterval(async () => {
@@ -1884,6 +2236,68 @@ app.get('/api/maintenance-status', (req, res) => {
         maintenance: settings.maintenance || false,
         message: settings.maintenance ? (settings.maintenanceMessage || 'System is under maintenance') : null
     });
+});
+
+// =====================
+// VM HTTP PROXY - /s/:serverId/*
+// =====================
+
+app.all('/s/:serverId/', async (req, res) => {
+    const { serverId } = req.params;
+    
+    const serverData = db.getServer(serverId);
+    if (!serverData) {
+        return res.status(404).json({ error: 'Server not found' });
+    }
+    
+    if (sandboxManager.getServerStatus(serverId) !== 'running') {
+        return res.status(503).json({ error: 'VM is not running' });
+    }
+    
+    // Get proxy port
+    let proxyPort = null;
+    try {
+        proxyPort = await sandboxManager.getVmProxyPort(serverId);
+    } catch {}
+    
+    if (!proxyPort) {
+        return res.status(503).json({ error: 'VM proxy not ready. Try again in a few seconds.' });
+    }
+    
+    // Proxy the request using native https
+    const targetPath = req.url.replace(`/s/${serverId}`, '') || '/';
+    
+    const proxyOptions = {
+        hostname: '127.0.0.1',
+        port: proxyPort,
+        path: targetPath,
+        method: req.method,
+        headers: { ...req.headers },
+        rejectUnauthorized: false
+    };
+    
+    delete proxyOptions.headers['host'];
+    proxyOptions.headers['host'] = `127.0.0.1:${proxyPort}`;
+    proxyOptions.headers['x-forwarded-for'] = req.ip;
+    proxyOptions.headers['x-forwarded-proto'] = req.protocol;
+    proxyOptions.headers['x-real-ip'] = req.ip;
+    
+    const proxyReq = https.request(proxyOptions, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res);
+    });
+    
+    proxyReq.on('error', (err) => {
+        if (!res.headersSent) {
+            res.status(502).send(`<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>The VM is not responding on port 443.</p><p>${err.message}</p></body></html>`);
+        }
+    });
+    
+    req.pipe(proxyReq);
+});
+
+app.get('/s/:serverId', async (req, res) => {
+    res.redirect(`/s/${req.params.serverId}/`);
 });
 
 // =====================

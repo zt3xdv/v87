@@ -518,6 +518,29 @@ select.form-control {
     font-size: 0.75rem;
 }
 
+.stat-item-2 .stat-flex {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.45rem 0;
+    border-bottom: 1px solid var(--border-light);
+    font-size: 0.8rem;
+}
+
+.stat-item-2 .stat-flex:last-child {
+    border-bottom: none;
+}
+
+.stat-item-2 .stat-flex span:first-child {
+    color: var(--text-secondary);
+}
+
+.stat-item-2 .stat-flex span:last-child {
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
 /* === TERMINAL === */
 #terminal {
     height: 400px;
@@ -622,10 +645,6 @@ select.form-control {
     display: flex;
     gap: 2px;
     margin-bottom: 1rem;
-    padding: 3px;
-    background: var(--bg-surface);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-color);
     overflow-x: auto;
 }
 
@@ -1014,7 +1033,7 @@ select.form-control {
     border: 1px solid var(--border-color);
     padding: 0.4rem 0.75rem;
     border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
+    font-family: var(--font-stack);
     font-size: 0.75rem;
     display: inline-flex;
     align-items: center;

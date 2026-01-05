@@ -4,7 +4,7 @@
   "limits": {
     "maxServers": 1,
     "maxRam": 1024,
-    "maxDisk": 8,
+    "maxDisk": 5,
     "maxCpu": 100,
     "maxIo": 100,
     "minRam": 512,
@@ -14,7 +14,7 @@
   "vm": {
     "defaultImage": "debian-11",
     "defaultRam": 1024,
-    "defaultDisk": "8G",
+    "defaultDisk": "5G",
     "defaultCpu": 100,
     "defaultIo": 0,
     "cpuCores": 2,

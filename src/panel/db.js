@@ -12,6 +12,7 @@ const SCHEDULES_FILE = path.join(DATA_DIR, 'schedules.json');
 const WEBHOOKS_FILE = path.join(DATA_DIR, 'webhooks.json');
 const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
@@ -22,6 +23,7 @@ if (!fs.existsSync(SCHEDULES_FILE)) fs.writeFileSync(SCHEDULES_FILE, '[]');
 if (!fs.existsSync(WEBHOOKS_FILE)) fs.writeFileSync(WEBHOOKS_FILE, '[]');
 if (!fs.existsSync(ALERTS_FILE)) fs.writeFileSync(ALERTS_FILE, '[]');
 if (!fs.existsSync(SETTINGS_FILE)) fs.writeFileSync(SETTINGS_FILE, '{}');
+if (!fs.existsSync(METRICS_FILE)) fs.writeFileSync(METRICS_FILE, '{}');
 
 function load(file) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -282,5 +284,31 @@ export default {
         const newSettings = { ...settings, ...updates };
         save(SETTINGS_FILE, newSettings);
         return newSettings;
-    }
+    },
+    
+    // Metrics history
+    getMetrics: (serverId) => {
+        const metrics = load(METRICS_FILE);
+        return metrics[serverId] || [];
+    },
+    
+    addMetric: (serverId, metric) => {
+        const metrics = load(METRICS_FILE);
+        if (!metrics[serverId]) metrics[serverId] = [];
+        metrics[serverId].push({
+            timestamp: new Date().toISOString(),
+            ...metric
+        });
+        // Keep last 1440 entries (24 hours at 1 per minute)
+        if (metrics[serverId].length > 1440) {
+            metrics[serverId] = metrics[serverId].slice(-1440);
+        }
+        save(METRICS_FILE, metrics);
+    },
+    
+    clearMetrics: (serverId) => {
+        const metrics = load(METRICS_FILE);
+        delete metrics[serverId];
+        save(METRICS_FILE, metrics);
+    },
 };
