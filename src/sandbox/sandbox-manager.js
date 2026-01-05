@@ -530,17 +530,15 @@ local-hostname: v87-vm
             await fs.unlink(vncSocketPath);
         } catch {}
         
-        // Generate deterministic ports based on serverId hash (range 10000-60000)
+        // Generate deterministic port based on serverId hash (range 10000-60000)
         const hash = serverId.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
-        const basePort = 10000 + Math.abs(hash % 50000);
-        const port443 = basePort;
-        const port80 = basePort + 1;
+        const port80 = 10000 + Math.abs(hash % 50000);
         
         const qemuArgs = [
             '-m', `${ram}`,
             ...cpuArgs,
             '-drive', `file=${diskPath},format=qcow2,if=virtio${ioLimit > 0 ? `,throttling.bps-total=${ioLimit * 1024 * 1024}` : ''}`,
-            '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:${port443}-:443,hostfwd=tcp:127.0.0.1:${port80}-:80`,
+            '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:${port80}-:80`,
             '-device', 'virtio-net-pci,netdev=net0',
             '-device', 'virtio-balloon-pci,id=balloon0',
             '-qmp', `unix:${qmpSocketPath},server,nowait`,
@@ -603,7 +601,6 @@ local-hostname: v87-vm
             qmpSocketPath,
             vncSocketPath,
             ram,
-            port443,
             port80
         });
 
@@ -873,13 +870,10 @@ local-hostname: v87-vm
         return stats;
     }
 
-    getVmProxyPort(serverId, targetPort = 443) {
+    getVmProxyPort(serverId) {
         const serverInfo = this.processes.get(serverId);
         if (!serverInfo) return null;
-        
-        if (targetPort === 443) return serverInfo.port443;
-        if (targetPort === 80) return serverInfo.port80;
-        return null;
+        return serverInfo.port80;
     }
 
     getProxyInfo(serverId) {

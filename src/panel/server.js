@@ -2252,14 +2252,8 @@ async function proxyToVm(req, res, serverId, useHttps = true) {
         return res.status(503).json({ error: 'VM is not running' });
     }
     
-    // Get proxy port - try HTTP (80) first, then HTTPS (443)
-    let proxyPort = sandboxManager.getVmProxyPort(serverId, 80);
-    let isHttps = false;
-    
-    if (!proxyPort) {
-        proxyPort = sandboxManager.getVmProxyPort(serverId, 443);
-        isHttps = true;
-    }
+    // Get proxy port (HTTP 80)
+    const proxyPort = sandboxManager.getVmProxyPort(serverId);
     
     if (!proxyPort) {
         return res.status(503).send(`<!DOCTYPE html>
@@ -2268,11 +2262,11 @@ async function proxyToVm(req, res, serverId, useHttps = true) {
 h1{color:#e74c3c}code{background:#f1f1f1;padding:2px 8px;border-radius:4px}
 button{margin-top:20px;padding:10px 20px;cursor:pointer}</style></head>
 <body><h1>VM Proxy Not Ready</h1>
-<p>The VM web server is not responding on ports 443 or 80.</p>
-<p>Make sure your VM has a web server running on one of these ports:</p>
+<p>The VM is not running or web server is not available.</p>
+<p>Make sure your VM has a web server running on port 80:</p>
 <ul style="text-align:left">
-<li><code>nginx</code>, <code>apache2</code>, or similar</li>
-<li>Listening on port <code>443</code> (HTTPS) or <code>80</code> (HTTP)</li>
+<li><code>python3 -m http.server 80</code></li>
+<li><code>nginx</code> or <code>apache2</code></li>
 </ul>
 <button onclick="location.reload()">Retry</button>
 </body></html>`);
@@ -2297,9 +2291,7 @@ button{margin-top:20px;padding:10px 20px;cursor:pointer}</style></head>
     proxyOptions.headers['x-forwarded-host'] = req.headers.host;
     proxyOptions.headers['x-forwarded-prefix'] = `/s/${serverId}`;
     
-    const transport = isHttps ? https : http;
-    
-    const proxyReq = transport.request(proxyOptions, (proxyRes) => {
+    const proxyReq = http.request(proxyOptions, (proxyRes) => {
         // Rewrite location headers for redirects
         const location = proxyRes.headers['location'];
         if (location && location.startsWith('/')) {
@@ -2317,7 +2309,7 @@ button{margin-top:20px;padding:10px 20px;cursor:pointer}</style></head>
 <style>body{font-family:system-ui;max-width:600px;margin:50px auto;padding:20px;text-align:center}
 h1{color:#e74c3c}pre{background:#f1f1f1;padding:10px;border-radius:4px;text-align:left;overflow:auto}</style></head>
 <body><h1>502 Bad Gateway</h1>
-<p>The VM is not responding on port ${isHttps ? 443 : 80}.</p>
+<p>The VM is not responding on port 80.</p>
 <pre>${err.message}</pre>
 <button onclick="location.reload()">Retry</button>
 </body></html>`);
