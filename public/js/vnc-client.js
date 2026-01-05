@@ -29,8 +29,16 @@ class VNCClient {
         this.canvas.style.background = '#000';
         this.canvas.style.display = 'block';
         this.canvas.style.maxWidth = '100%';
+        this.canvas.style.maxHeight = '100%';
+        this.canvas.style.width = 'auto';
+        this.canvas.style.height = 'auto';
+        this.canvas.style.objectFit = 'contain';
         this.canvas.style.margin = '0 auto';
         this.canvas.tabIndex = 1;
+        this.container.style.overflow = 'hidden';
+        this.container.style.display = 'flex';
+        this.container.style.alignItems = 'center';
+        this.container.style.justifyContent = 'center';
         this.container.appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
         
@@ -41,7 +49,29 @@ class VNCClient {
         this.canvas.addEventListener('keydown', (e) => this.handleKey(e, true));
         this.canvas.addEventListener('keyup', (e) => this.handleKey(e, false));
         
+        window.addEventListener('resize', () => this.fitToContainer());
+        
         this.resize(800, 600);
+    }
+    
+    fitToContainer() {
+        if (!this.canvas || !this.container) return;
+        
+        const containerRect = this.container.getBoundingClientRect();
+        const aspectRatio = this.width / this.height;
+        
+        let displayWidth = containerRect.width;
+        let displayHeight = containerRect.height;
+        
+        if (displayWidth / displayHeight > aspectRatio) {
+            displayWidth = displayHeight * aspectRatio;
+        } else {
+            displayHeight = displayWidth / aspectRatio;
+        }
+        
+        this.canvas.style.width = `${Math.floor(displayWidth)}px`;
+        this.canvas.style.height = `${Math.floor(displayHeight)}px`;
+        this.scale = this.width / displayWidth;
     }
     
     resize(width, height) {
@@ -53,6 +83,7 @@ class VNCClient {
         for (let i = 3; i < this.frameBuffer.data.length; i += 4) {
             this.frameBuffer.data[i] = 255;
         }
+        this.fitToContainer();
     }
     
     connect(serverId, token) {
