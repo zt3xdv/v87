@@ -82,10 +82,12 @@ class VNCClient {
         });
         
         this.socket.on('vnc-connected', () => {
+            console.log('VNC: received vnc-connected event');
             this.state = 'handshake';
         });
         
         this.socket.on('vnc-data', (data) => {
+            console.log('VNC: received data, length:', data.length, 'state:', this.state);
             const bytes = Array.isArray(data) ? new Uint8Array(data) : new Uint8Array(data);
             this.handleData(bytes);
         });
@@ -168,8 +170,13 @@ class VNCClient {
         const version = String.fromCharCode(...this.buffer.slice(0, 12));
         this.rfbVersion = version.trim();
         
-        this.send(new TextEncoder().encode('RFB 003.008\n'));
+        console.log('VNC: server version:', this.rfbVersion);
+        
+        const response = new Uint8Array([0x52, 0x46, 0x42, 0x20, 0x30, 0x30, 0x33, 0x2e, 0x30, 0x30, 0x38, 0x0a]); // "RFB 003.008\n"
+        this.send(response);
         this.state = 'security';
+        
+        console.log('VNC: sent client version, state:', this.state);
         
         return 12;
     }
