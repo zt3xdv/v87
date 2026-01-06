@@ -1485,30 +1485,30 @@ const App = {
                     const srvMax = n.maxServers || 0;
                     
                     const tr = document.createElement('tr');
-                    tr.innerHTML = \`
-                        <td><strong>\${n.name}</strong></td>
-                        <td>\${n.region || 'default'}</td>
+                    tr.innerHTML = `
+                        <td><strong>${n.name}</strong></td>
+                        <td>${n.region || 'default'}</td>
                         <td>
-                            <span class="badge \${n.online ? 'running' : 'stopped'}">
-                                \${n.online ? 'ONLINE' : 'OFFLINE'}
+                            <span class="badge ${n.online ? 'running' : 'stopped'}">
+                                ${n.online ? 'ONLINE' : 'OFFLINE'}
                             </span>
-                            \${!n.enabled ? '<span class="badge suspended">DISABLED</span>' : ''}
+                            ${!n.enabled ? '<span class="badge suspended">DISABLED</span>' : ''}
                         </td>
-                        <td>\${ramUsed}MB / \${ramTotal}MB</td>
-                        <td>\${diskUsed}GB / \${diskTotal}GB</td>
-                        <td>\${srvCount} / \${srvMax}</td>
+                        <td>${ramUsed}MB / ${ramTotal}MB</td>
+                        <td>${diskUsed}GB / ${diskTotal}GB</td>
+                        <td>${srvCount} / ${srvMax}</td>
                         <td style="text-align:right">
                             <button class="btn btn-sm btn-secondary edit-btn">Edit</button>
                             <button class="btn btn-sm btn-secondary reconnect-btn" title="Reconnect">
                                 <span class="material-symbols-outlined icon-sm">refresh</span>
                             </button>
                         </td>
-                    \`;
+                    `;
                     tr.querySelector('.edit-btn').onclick = () => App.openNodeEditModal(n.id, loadNodes);
                     tr.querySelector('.reconnect-btn').onclick = async () => {
-                        await fetch(\`/api/admin/nodes/\${n.id}/reconnect\`, {
+                        await fetch(`/api/admin/nodes/${n.id}/reconnect`, {
                             method: 'POST',
-                            headers: { 'Authorization': \`Bearer \${localStorage.getItem('token')}\` }
+                            headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                         });
                         setTimeout(loadNodes, 1000);
                     };
@@ -1531,8 +1531,8 @@ const App = {
         
         if (!isNew) {
             try {
-                const r = await fetch(\`/api/admin/nodes/\${nodeId}\`, {
-                    headers: { 'Authorization': \`Bearer \${localStorage.getItem('token')}\` }
+                const r = await fetch(`/api/admin/nodes/${nodeId}`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                 });
                 node = await r.json();
             } catch (e) {
@@ -1541,64 +1541,64 @@ const App = {
             }
         }
         
-        const modalHtml = \`
+        const modalHtml = `
             <div class="modal-overlay" id="node-modal">
                 <div class="modal-content" style="max-width:500px">
                     <div class="modal-header">
-                        <h3>\${isNew ? 'Add Node' : 'Edit Node'}</h3>
+                        <h3>${isNew ? 'Add Node' : 'Edit Node'}</h3>
                         <button class="btn-close" onclick="document.getElementById('node-modal').remove()">&times;</button>
                     </div>
                     <form id="node-form">
                         <div class="form-group">
                             <label>Name</label>
-                            <input type="text" id="node-name" class="form-control" value="\${node.name}" required>
+                            <input type="text" id="node-name" class="form-control" value="${node.name}" required>
                         </div>
                         <div class="form-group">
                             <label>WebSocket URL</label>
-                            <input type="text" id="node-url" class="form-control" value="\${node.url || ''}" placeholder="ws://host:7000" required>
+                            <input type="text" id="node-url" class="form-control" value="${node.url || ''}" placeholder="ws://host:7000" required>
                         </div>
                         <div class="form-group">
                             <label>Secret Key</label>
-                            <input type="text" id="node-secret" class="form-control" value="" placeholder="\${isNew ? 'Required' : 'Leave empty to keep current'}">
+                            <input type="text" id="node-secret" class="form-control" value="" placeholder="${isNew ? 'Required' : 'Leave empty to keep current'}">
                         </div>
                         <div class="form-group">
                             <label>Region</label>
-                            <input type="text" id="node-region" class="form-control" value="\${node.region || 'default'}">
+                            <input type="text" id="node-region" class="form-control" value="${node.region || 'default'}">
                         </div>
                         <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
                             <div class="form-group">
                                 <label>Max RAM (MB)</label>
-                                <input type="number" id="node-maxram" class="form-control" value="\${node.maxRam || 8192}">
+                                <input type="number" id="node-maxram" class="form-control" value="${node.maxRam || 8192}">
                             </div>
                             <div class="form-group">
                                 <label>Max Disk (GB)</label>
-                                <input type="number" id="node-maxdisk" class="form-control" value="\${node.maxDisk || 100}">
+                                <input type="number" id="node-maxdisk" class="form-control" value="${node.maxDisk || 100}">
                             </div>
                         </div>
                         <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
                             <div class="form-group">
                                 <label>Max CPU Cores</label>
-                                <input type="number" id="node-maxcpu" class="form-control" value="\${node.maxCpu || 8}">
+                                <input type="number" id="node-maxcpu" class="form-control" value="${node.maxCpu || 8}">
                             </div>
                             <div class="form-group">
                                 <label>Max Servers</label>
-                                <input type="number" id="node-maxservers" class="form-control" value="\${node.maxServers || 10}">
+                                <input type="number" id="node-maxservers" class="form-control" value="${node.maxServers || 10}">
                             </div>
                         </div>
                         <div class="form-group">
                             <label class="checkbox-label">
-                                <input type="checkbox" id="node-enabled" \${node.enabled ? 'checked' : ''}> Enabled
+                                <input type="checkbox" id="node-enabled" ${node.enabled ? 'checked' : ''}> Enabled
                             </label>
                         </div>
                         <div class="modal-footer" style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
-                            \${!isNew ? '<button type="button" id="btn-delete-node" class="btn btn-danger">Delete</button>' : ''}
+                            ${!isNew ? '<button type="button" id="btn-delete-node" class="btn btn-danger">Delete</button>' : ''}
                             <button type="button" onclick="document.getElementById('node-modal').remove()" class="btn btn-secondary">Cancel</button>
                             <button type="submit" class="btn btn-primary">Save</button>
                         </div>
                     </form>
                 </div>
             </div>
-        \`;
+        `;
         
         document.body.insertAdjacentHTML('beforeend', modalHtml);
         
@@ -1622,11 +1622,11 @@ const App = {
             }
             
             try {
-                const r = await fetch(isNew ? '/api/admin/nodes' : \`/api/admin/nodes/\${nodeId}\`, {
+                const r = await fetch(isNew ? '/api/admin/nodes' : `/api/admin/nodes/${nodeId}`, {
                     method: isNew ? 'POST' : 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': \`Bearer \${localStorage.getItem('token')}\`
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
                     },
                     body: JSON.stringify(payload)
                 });
@@ -1650,9 +1650,9 @@ const App = {
                 if (!confirmed) return;
                 
                 try {
-                    const r = await fetch(\`/api/admin/nodes/\${nodeId}\`, {
+                    const r = await fetch(`/api/admin/nodes/${nodeId}`, {
                         method: 'DELETE',
-                        headers: { 'Authorization': \`Bearer \${localStorage.getItem('token')}\` }
+                        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                     });
                     
                     if (!r.ok) {
