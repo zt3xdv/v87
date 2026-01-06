@@ -142,7 +142,6 @@ class VNCClient {
         });
         
         this.socket.on('vnc-connected', () => {
-            console.log('VNC: vnc-connected received, waiting for server version');
             this.state = 'handshake';
         });
         
@@ -162,7 +161,6 @@ class VNCClient {
                 console.error('VNC: Unknown data format', typeof data, data);
                 return;
             }
-            console.log('VNC: received', bytes.length, 'bytes, state:', this.state);
             this.handleData(bytes);
         });
         
@@ -243,12 +241,10 @@ class VNCClient {
         
         const version = String.fromCharCode(...this.buffer.slice(0, 12));
         this.rfbVersion = version.trim();
-        console.log('VNC: server version:', this.rfbVersion);
         
         const response = new Uint8Array([0x52, 0x46, 0x42, 0x20, 0x30, 0x30, 0x33, 0x2e, 0x30, 0x30, 0x38, 0x0a]);
         this.send(response);
         this.state = 'security';
-        console.log('VNC: sent client version, waiting for security types');
         
         return 12;
     }
@@ -343,7 +339,6 @@ class VNCClient {
         this.state = 'connected';
         this.showStatus('');
         this.onConnect();
-        console.log('VNC: connected! Screen size:', this.width, 'x', this.height);
         
         // Request initial full update
         this.requestUpdate(false);
@@ -391,7 +386,6 @@ class VNCClient {
         
         const numRects = (this.buffer[2] << 8) | this.buffer[3];
         let offset = 4;
-        console.log('VNC: framebuffer update with', numRects, 'rectangles');
         
         for (let i = 0; i < numRects; i++) {
             if (this.buffer.length < offset + 12) return 0;
