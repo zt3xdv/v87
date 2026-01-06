@@ -345,15 +345,72 @@ local-hostname: v87-vm
             pid: info.process.pid,
             startedAt: info.startedAt,
             uptime: Math.floor((Date.now() - new Date(info.startedAt).getTime()) / 1000),
-            ram: info.metadata.ram,
-            cpuCores: info.metadata.cpuCores
+            configuredRam: info.metadata.ram,
+            cpuCores: info.metadata.cpuCores,
+            memory: null,
+            cpu: null,
+            block: null
         };
 
+        // Memory stats
         try {
             const balloon = await this.qmpCommand(serverId, 'query-balloon');
             if (balloon?.actual) {
-                stats.actualMemory = Math.floor(balloon.actual / 1024 / 1024);
+                stats.memory = {
+                    actual: Math.floor(balloon.actual / 1024 / 1024),
+                    configured: info.metadata.ram
+                };
             }
+        } catch {}
+
+        // CPU stats
+        try {
+            const cpus = await this.qmpCommand(serverId, 'query-cpus-fast');
+            if (cpus && Array.isArray(cpus)) {
+                stats.cpu = {
+                    count: cpus.length,
+                    cpus: cpus.map(c => ({
+                        index: c['cpu-index'],
+                        halted: c.halted || false
+                    }))
+                };
+            }
+        } catch {}
+
+        // Block I/O stats
+        try {
+            const blocks = await this.qmpCommand(serverId, 'query-block');
+            if (blocks && Array.isArray(blocks)) {
+                stats.block = blocks
+                    .filter(b => b.inserted)
+                    .map(b => ({
+                        device: b.device,
+                        file: b.inserted?.file,
+                        bytesWritten: b.inserted?.wr_bytes || 0,
+                        bytesRead: b.inserted?.rd_bytes || 0,
+                        opsWritten: b.inserted?.wr_operations || 0,
+                        opsRead: b.inserted?.rd_operations || 0
+                    }));
+            }
+        } catch {}
+
+        // CPU usage from /proc
+        try {
+            const procStat = await fs.readFile(`/proc/${info.process.pid}/stat`, 'utf-8');
+            const parts = procStat.split(' ');
+            const utime = parseInt(parts[13]) || 0;
+            const stime = parseInt(parts[14]) || 0;
+            const starttime = parseInt(parts[21]) || 0;
+            
+            const uptime = await fs.readFile('/proc/uptime', 'utf-8');
+            const uptimeSecs = parseFloat(uptime.split(' ')[0]);
+            const hertz = 100;
+            
+            const totalTime = utime + stime;
+            const seconds = uptimeSecs - (starttime / hertz);
+            const cpuUsage = seconds > 0 ? ((totalTime / hertz) / seconds) * 100 : 0;
+            
+            stats.cpuUsage = Math.round(cpuUsage * 10) / 10;
         } catch {}
 
         return stats;
@@ -475,6 +532,203 @@ local-hostname: v87-vm
             } catch {}
         }
         this.processes.clear();
+    }
+
+    // Disk operations
+    async resizeDisk(userId, serverId, newSizeGB) {
+        if (this.processes.has(serverId)) {
+            throw new Error('Stop the VM before resizing disk');
+        }
+        
+        const diskPath = this.getDiskPath(userId, serverId);
+        const newSize = `${newSizeGB}G`;
+        
+        const info = await this.execCommand('qemu-img', ['info', '--output=json', diskPath]);
+        const parsed = JSON.parse(info);
+        const currentSizeGB = Math.ceil(parsed['virtual-size'] / (1024 * 1024 * 1024));
+        
+        if (newSizeGB < currentSizeGB) {
+            throw new Error(`Cannot shrink disk. Current: ${currentSizeGB}GB, requested: ${newSizeGB}GB`);
+        }
+        
+        await this.execCommand('qemu-img', ['resize', diskPath, newSize]);
+        
+        // Update metadata
+        const vmPath = this.getVMPath(userId, serverId);
+        const metadataPath = path.join(vmPath, 'metadata.json');
+        try {
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+            metadata.disk = newSize;
+            await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        } catch {}
+        
+        return { success: true, newSize, previousSize: `${currentSizeGB}G` };
+    }
+
+    async getDiskInfo(userId, serverId) {
+        const diskPath = this.getDiskPath(userId, serverId);
+        
+        try {
+            const info = await this.execCommand('qemu-img', ['info', '--output=json', diskPath]);
+            const parsed = JSON.parse(info);
+            return {
+                virtualSize: parsed['virtual-size'],
+                actualSize: parsed['actual-size'],
+                format: parsed.format,
+                virtualSizeGB: Math.ceil(parsed['virtual-size'] / (1024 * 1024 * 1024)),
+                actualSizeGB: (parsed['actual-size'] / (1024 * 1024 * 1024)).toFixed(2)
+            };
+        } catch (err) {
+            throw new Error('Failed to get disk info: ' + err.message);
+        }
+    }
+
+    // Limits
+    async getServerLimits(userId, serverId) {
+        const vmPath = this.getVMPath(userId, serverId);
+        const metadataPath = path.join(vmPath, 'metadata.json');
+        
+        try {
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+            return {
+                ram: metadata.ram || 1024,
+                cpuCores: metadata.cpuCores || 2,
+                disk: metadata.disk || '10G'
+            };
+        } catch {
+            return { ram: 1024, cpuCores: 2, disk: '10G' };
+        }
+    }
+
+    async updateServerLimits(userId, serverId, limits = {}) {
+        const vmPath = this.getVMPath(userId, serverId);
+        const metadataPath = path.join(vmPath, 'metadata.json');
+        
+        let metadata = {};
+        try {
+            metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        } catch {
+            throw new Error('Server metadata not found');
+        }
+
+        if (limits.ram !== undefined) {
+            metadata.ram = Math.max(128, Math.min(limits.ram, 65536));
+        }
+        if (limits.cpuCores !== undefined) {
+            metadata.cpuCores = Math.max(1, Math.min(limits.cpuCores, 16));
+        }
+
+        await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        
+        return {
+            updated: true,
+            limits: {
+                ram: metadata.ram,
+                cpuCores: metadata.cpuCores
+            },
+            requiresRestart: this.processes.has(serverId)
+        };
+    }
+
+    // Snapshots
+    async createSnapshot(userId, serverId, snapshotName) {
+        const diskPath = this.getDiskPath(userId, serverId);
+        const vmPath = this.getVMPath(userId, serverId);
+        const snapshotsDir = path.join(vmPath, 'snapshots');
+        await fs.mkdir(snapshotsDir, { recursive: true });
+        
+        const snapshotId = Date.now().toString();
+        const snapshotFile = path.join(snapshotsDir, `${snapshotId}.qcow2`);
+        
+        await this.execCommand('qemu-img', [
+            'create', '-f', 'qcow2',
+            '-b', diskPath, '-F', 'qcow2',
+            snapshotFile
+        ]);
+        
+        const metaFile = path.join(snapshotsDir, `${snapshotId}.json`);
+        await fs.writeFile(metaFile, JSON.stringify({
+            id: snapshotId,
+            name: snapshotName || `Snapshot ${new Date().toLocaleString()}`,
+            createdAt: new Date().toISOString(),
+            parentDisk: diskPath
+        }, null, 2));
+        
+        return { id: snapshotId, name: snapshotName || `Snapshot ${new Date().toLocaleString()}` };
+    }
+
+    async listSnapshots(userId, serverId) {
+        const vmPath = this.getVMPath(userId, serverId);
+        const snapshotsDir = path.join(vmPath, 'snapshots');
+        
+        try {
+            const files = await fs.readdir(snapshotsDir);
+            const snapshots = [];
+            
+            for (const file of files) {
+                if (file.endsWith('.json')) {
+                    try {
+                        const data = JSON.parse(await fs.readFile(path.join(snapshotsDir, file), 'utf-8'));
+                        const qcowFile = path.join(snapshotsDir, `${data.id}.qcow2`);
+                        try {
+                            const stat = await fs.stat(qcowFile);
+                            data.size = stat.size;
+                        } catch {}
+                        snapshots.push(data);
+                    } catch {}
+                }
+            }
+            
+            return snapshots.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        } catch {
+            return [];
+        }
+    }
+
+    async restoreSnapshot(userId, serverId, snapshotId) {
+        if (this.processes.has(serverId)) {
+            throw new Error('Stop the VM before restoring a snapshot');
+        }
+        
+        const vmPath = this.getVMPath(userId, serverId);
+        const snapshotsDir = path.join(vmPath, 'snapshots');
+        const snapshotFile = path.join(snapshotsDir, `${snapshotId}.qcow2`);
+        const diskPath = this.getDiskPath(userId, serverId);
+        const backupPath = diskPath + '.backup';
+        
+        try {
+            await fs.access(snapshotFile);
+        } catch {
+            throw new Error('Snapshot not found');
+        }
+        
+        await fs.rename(diskPath, backupPath);
+        
+        try {
+            await this.execCommand('qemu-img', [
+                'create', '-f', 'qcow2',
+                '-b', snapshotFile, '-F', 'qcow2',
+                diskPath
+            ]);
+            await fs.unlink(backupPath);
+        } catch (err) {
+            await fs.rename(backupPath, diskPath);
+            throw err;
+        }
+        
+        return { restored: true, snapshotId };
+    }
+
+    async deleteSnapshot(userId, serverId, snapshotId) {
+        const vmPath = this.getVMPath(userId, serverId);
+        const snapshotsDir = path.join(vmPath, 'snapshots');
+        const snapshotFile = path.join(snapshotsDir, `${snapshotId}.qcow2`);
+        const metaFile = path.join(snapshotsDir, `${snapshotId}.json`);
+        
+        try { await fs.unlink(snapshotFile); } catch {}
+        try { await fs.unlink(metaFile); } catch {}
+        
+        return { deleted: true };
     }
 }
 

@@ -278,6 +278,42 @@ export class NodeClient extends EventEmitter {
         }
     }
 
+    // Disk operations
+    async resizeDisk(serverId, userId, newSizeGB) {
+        return this.send('resize-disk', { serverId, userId, newSizeGB });
+    }
+
+    async getDiskInfo(serverId, userId) {
+        return this.send('disk-info', { serverId, userId });
+    }
+
+    // Limits
+    async getLimits(serverId, userId) {
+        return this.send('get-limits', { serverId, userId });
+    }
+
+    async updateLimits(serverId, userId, limits) {
+        return this.send('update-limits', { serverId, userId, limits });
+    }
+
+    // Snapshots
+    async createSnapshot(serverId, userId, name) {
+        return this.send('create-snapshot', { serverId, userId, name });
+    }
+
+    async listSnapshots(serverId, userId) {
+        const result = await this.send('list-snapshots', { serverId, userId });
+        return result.snapshots || [];
+    }
+
+    async restoreSnapshot(serverId, userId, snapshotId) {
+        return this.send('restore-snapshot', { serverId, userId, snapshotId });
+    }
+
+    async deleteSnapshot(serverId, userId, snapshotId) {
+        return this.send('delete-snapshot', { serverId, userId, snapshotId });
+    }
+
     disconnect() {
         this.stopPing();
         

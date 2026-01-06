@@ -155,6 +155,30 @@ export class NodeDaemon {
             case 'vnc-data':
                 return this.handleVNCData(ws, payload);
 
+            case 'resize-disk':
+                return this.handleResizeDisk(ws, id, payload);
+
+            case 'disk-info':
+                return this.handleDiskInfo(ws, id, payload);
+
+            case 'get-limits':
+                return this.handleGetLimits(ws, id, payload);
+
+            case 'update-limits':
+                return this.handleUpdateLimits(ws, id, payload);
+
+            case 'create-snapshot':
+                return this.handleCreateSnapshot(ws, id, payload);
+
+            case 'list-snapshots':
+                return this.handleListSnapshots(ws, id, payload);
+
+            case 'restore-snapshot':
+                return this.handleRestoreSnapshot(ws, id, payload);
+
+            case 'delete-snapshot':
+                return this.handleDeleteSnapshot(ws, id, payload);
+
             default:
                 return this.sendError(ws, id, `Unknown command: ${type}`);
         }
@@ -440,6 +464,110 @@ export class NodeDaemon {
     handleVNCData(ws, payload) {
         if (ws.vncSocket && payload.data) {
             ws.vncSocket.write(Buffer.from(payload.data, 'base64'));
+        }
+    }
+
+    async handleResizeDisk(ws, id, payload) {
+        const { serverId, userId, newSizeGB } = payload || {};
+        if (!serverId || !userId || !newSizeGB) {
+            return this.sendError(ws, id, 'serverId, userId, newSizeGB required');
+        }
+        try {
+            const result = await this.vmManager.resizeDisk(userId, serverId, newSizeGB);
+            this.sendResponse(ws, id, 'disk-resized', result);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleDiskInfo(ws, id, payload) {
+        const { serverId, userId } = payload || {};
+        if (!serverId || !userId) {
+            return this.sendError(ws, id, 'serverId, userId required');
+        }
+        try {
+            const info = await this.vmManager.getDiskInfo(userId, serverId);
+            this.sendResponse(ws, id, 'disk-info', info);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleGetLimits(ws, id, payload) {
+        const { serverId, userId } = payload || {};
+        if (!serverId || !userId) {
+            return this.sendError(ws, id, 'serverId, userId required');
+        }
+        try {
+            const limits = await this.vmManager.getServerLimits(userId, serverId);
+            this.sendResponse(ws, id, 'limits', limits);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleUpdateLimits(ws, id, payload) {
+        const { serverId, userId, limits } = payload || {};
+        if (!serverId || !userId) {
+            return this.sendError(ws, id, 'serverId, userId required');
+        }
+        try {
+            const result = await this.vmManager.updateServerLimits(userId, serverId, limits);
+            this.sendResponse(ws, id, 'limits-updated', result);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleCreateSnapshot(ws, id, payload) {
+        const { serverId, userId, name } = payload || {};
+        if (!serverId || !userId) {
+            return this.sendError(ws, id, 'serverId, userId required');
+        }
+        try {
+            const result = await this.vmManager.createSnapshot(userId, serverId, name);
+            this.sendResponse(ws, id, 'snapshot-created', result);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleListSnapshots(ws, id, payload) {
+        const { serverId, userId } = payload || {};
+        if (!serverId || !userId) {
+            return this.sendError(ws, id, 'serverId, userId required');
+        }
+        try {
+            const snapshots = await this.vmManager.listSnapshots(userId, serverId);
+            this.sendResponse(ws, id, 'snapshots', { snapshots });
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleRestoreSnapshot(ws, id, payload) {
+        const { serverId, userId, snapshotId } = payload || {};
+        if (!serverId || !userId || !snapshotId) {
+            return this.sendError(ws, id, 'serverId, userId, snapshotId required');
+        }
+        try {
+            const result = await this.vmManager.restoreSnapshot(userId, serverId, snapshotId);
+            this.sendResponse(ws, id, 'snapshot-restored', result);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
+        }
+    }
+
+    async handleDeleteSnapshot(ws, id, payload) {
+        const { serverId, userId, snapshotId } = payload || {};
+        if (!serverId || !userId || !snapshotId) {
+            return this.sendError(ws, id, 'serverId, userId, snapshotId required');
+        }
+        try {
+            const result = await this.vmManager.deleteSnapshot(userId, serverId, snapshotId);
+            this.sendResponse(ws, id, 'snapshot-deleted', result);
+        } catch (err) {
+            this.sendError(ws, id, err.message);
         }
     }
 

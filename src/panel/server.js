@@ -1116,7 +1116,21 @@ app.get('/api/server/:id/limits', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        const limits = await sandboxManager.getServerLimits(serverData.ownerId, serverData.id);
+        let limits;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    limits = await client.getLimits(serverData.id, serverData.ownerId);
+                } catch {
+                    limits = { ram: serverData.ram, cpuCores: serverData.cpuCores };
+                }
+            } else {
+                limits = { ram: serverData.ram, cpuCores: serverData.cpuCores };
+            }
+        } else {
+            limits = await sandboxManager.getServerLimits(serverData.ownerId, serverData.id);
+        }
         res.json(limits);
     } catch (err) {
         next(err);
@@ -1132,12 +1146,25 @@ app.post('/api/server/:id/limits', requireAuth, async (req, res, next) => {
         }
         
         const { ram, cpuLimit, ioLimit, cpuCores } = req.body;
-        const result = await sandboxManager.updateServerLimits(serverData.ownerId, serverData.id, {
-            ram, cpuLimit, ioLimit, cpuCores
-        });
+        
+        let result;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            result = await client.updateLimits(serverData.id, serverData.ownerId, { ram, cpuCores });
+        } else {
+            result = await sandboxManager.updateServerLimits(serverData.ownerId, serverData.id, {
+                ram, cpuLimit, ioLimit, cpuCores
+            });
+        }
         
         if (ram !== undefined) {
             db.updateServer(req.params.id, { ram });
+        }
+        if (cpuCores !== undefined) {
+            db.updateServer(req.params.id, { cpuCores });
         }
         
         res.json(result);
@@ -1189,10 +1216,6 @@ app.post('/api/server/:id/resize-disk', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        if (sandboxManager.getServerStatus(serverData.id) === 'running') {
-            return res.status(400).json({ error: 'Stop the VM before resizing disk' });
-        }
-        
         const user = db.findUserById(serverData.ownerId);
         const userLimits = getUserLimits(user);
         const servers = db.getUserServers(user.id);
@@ -1203,7 +1226,20 @@ app.post('/api/server/:id/resize-disk', requireAuth, async (req, res, next) => {
             return res.status(400).json({ error: `Exceeds disk quota. Available: ${userLimits.maxDisk - otherDisk}GB` });
         }
         
-        const result = await sandboxManager.resizeDisk(serverData.ownerId, serverData.id, newSizeGB);
+        let result;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            result = await client.resizeDisk(serverData.id, serverData.ownerId, newSizeGB);
+        } else {
+            if (sandboxManager.getServerStatus(serverData.id) === 'running') {
+                return res.status(400).json({ error: 'Stop the VM before resizing disk' });
+            }
+            result = await sandboxManager.resizeDisk(serverData.ownerId, serverData.id, newSizeGB);
+        }
+        
         db.updateServer(serverData.id, { diskSize: `${newSizeGB}G` });
         audit(req.user.id, req.user.username, 'disk_resize', { serverId: serverData.id, newSize: newSizeGB });
         
@@ -1290,6 +1326,23 @@ app.get('/api/server/:id/disk-info', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    const info = await client.getDiskInfo(serverData.id, serverData.ownerId);
+                    res.json({
+                        virtualSize: formatBytes(info.virtualSize),
+                        actualSize: formatBytes(info.actualSize),
+                        format: info.format
+                    });
+                    return;
+                } catch {}
+            }
+            res.json({ virtualSize: '-', actualSize: '-', format: '-' });
+            return;
+        }
+        
         const diskPath = sandboxManager.getDiskPath(serverData.ownerId, serverData.id);
         
         try {
@@ -1340,6 +1393,114 @@ app.post('/api/server/:id/reinstall', requireAuth, async (req, res, next) => {
         });
         
         res.json({ success: true });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// =====================
+// SNAPSHOTS
+// =====================
+
+app.get('/api/server/:id/snapshots', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        let snapshots;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            snapshots = await client.listSnapshots(serverData.id, serverData.ownerId);
+        } else {
+            snapshots = await sandboxManager.listSnapshots(serverData.ownerId, serverData.id);
+        }
+        
+        res.json({ snapshots });
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/server/:id/snapshots', requireAuth, async (req, res, next) => {
+    try {
+        const { name } = req.body;
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        let result;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            result = await client.createSnapshot(serverData.id, serverData.ownerId, name);
+        } else {
+            result = await sandboxManager.createSnapshot(serverData.ownerId, serverData.id, name);
+        }
+        
+        audit(req.user.id, req.user.username, 'snapshot_create', { serverId: serverData.id, snapshotId: result.id });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/api/server/:id/snapshots/:snapshotId/restore', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        let result;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            result = await client.restoreSnapshot(serverData.id, serverData.ownerId, req.params.snapshotId);
+        } else {
+            result = await sandboxManager.restoreSnapshot(serverData.ownerId, serverData.id, req.params.snapshotId);
+        }
+        
+        audit(req.user.id, req.user.username, 'snapshot_restore', { serverId: serverData.id, snapshotId: req.params.snapshotId });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.delete('/api/server/:id/snapshots/:snapshotId', requireAuth, async (req, res, next) => {
+    try {
+        const serverData = db.getServer(req.params.id);
+        if (!serverData) return res.status(404).json({ error: 'Server not found' });
+        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        let result;
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            result = await client.deleteSnapshot(serverData.id, serverData.ownerId, req.params.snapshotId);
+        } else {
+            result = await sandboxManager.deleteSnapshot(serverData.ownerId, serverData.id, req.params.snapshotId);
+        }
+        
+        audit(req.user.id, req.user.username, 'snapshot_delete', { serverId: serverData.id, snapshotId: req.params.snapshotId });
+        res.json(result);
     } catch (err) {
         next(err);
     }
