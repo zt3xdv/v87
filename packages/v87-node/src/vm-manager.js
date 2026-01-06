@@ -15,7 +15,7 @@ function validateId(id) {
 export class VMManager extends EventEmitter {
     constructor(options = {}) {
         super();
-        this.dataDir = options.dataDir || './data';
+        this.dataDir = path.resolve(options.dataDir || './data');
         this.vmsDir = path.join(this.dataDir, 'vms');
         this.enableKvm = options.enableKvm || false;
         this.qemuPath = options.qemuPath || 'qemu-system-x86_64';
@@ -28,15 +28,15 @@ export class VMManager extends EventEmitter {
     }
 
     getVMPath(userId, serverId) {
-        return path.join(this.vmsDir, userId, serverId);
+        return path.resolve(this.vmsDir, userId, serverId);
     }
 
     getDiskPath(userId, serverId) {
-        return path.join(this.getVMPath(userId, serverId), 'disk.qcow2');
+        return path.resolve(this.getVMPath(userId, serverId), 'disk.qcow2');
     }
 
     getSocketPath(serverId, type) {
-        return path.join(this.vmsDir, `${serverId}-${type}.sock`);
+        return path.resolve(this.vmsDir, `${serverId}-${type}.sock`);
     }
 
     generatePassword(length = 12) {

@@ -6,7 +6,7 @@ import http from 'node:http';
 
 export class ImageManager {
     constructor(options = {}) {
-        this.dataDir = options.dataDir || './data';
+        this.dataDir = path.resolve(options.dataDir || './data');
         this.imagesDir = path.join(this.dataDir, 'images');
         this.downloads = new Map();
     }
@@ -16,11 +16,11 @@ export class ImageManager {
     }
 
     getImagePath(imageId) {
-        return path.join(this.imagesDir, `${imageId}.qcow2`);
+        return path.resolve(this.imagesDir, `${imageId}.qcow2`);
     }
 
     getMetadataPath(imageId) {
-        return path.join(this.imagesDir, `${imageId}.json`);
+        return path.resolve(this.imagesDir, `${imageId}.json`);
     }
 
     async listImages() {
