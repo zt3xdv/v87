@@ -19,6 +19,7 @@ export class NodeClient extends EventEmitter {
         this.maxReconnectAttempts = 10;
         this.reconnectDelay = 5000;
         this.authFailed = false;
+        this.pingInterval = null;
     }
 
     connect() {
@@ -53,6 +54,7 @@ export class NodeClient extends EventEmitter {
         });
 
         this.ws.on('close', (code) => {
+            this.stopPing();
             const wasAuth = this.authenticated;
             this.connected = false;
             this.authenticated = false;
@@ -86,6 +88,7 @@ export class NodeClient extends EventEmitter {
             this.authenticated = true;
             this.wasAuthenticated = true;
             this.emit('connected');
+            this.startPing();
         }).catch((err) => {
             this.authFailed = true;
             this.emit('error', new Error('Authentication failed: ' + err.message));
@@ -93,6 +96,22 @@ export class NodeClient extends EventEmitter {
                 this.ws.close();
             }
         });
+    }
+
+    startPing() {
+        this.stopPing();
+        this.pingInterval = setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.ping();
+            }
+        }, 30000);
+    }
+
+    stopPing() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
     }
 
     scheduleReconnect() {
@@ -156,7 +175,7 @@ export class NodeClient extends EventEmitter {
         }
     }
 
-    send(type, payload = {}) {
+    send(type, payload = {}, timeoutMs = 30000) {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 reject(new Error('Not connected'));
@@ -168,11 +187,17 @@ export class NodeClient extends EventEmitter {
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(id);
                 reject(new Error('Request timeout'));
-            }, 30000);
+            }, timeoutMs);
 
             this.pendingRequests.set(id, { resolve, reject, timeout });
 
-            this.ws.send(JSON.stringify({ type, id, payload }));
+            try {
+                this.ws.send(JSON.stringify({ type, id, payload }));
+            } catch (err) {
+                clearTimeout(timeout);
+                this.pendingRequests.delete(id);
+                reject(err);
+            }
         });
     }
 
@@ -202,7 +227,8 @@ export class NodeClient extends EventEmitter {
     }
 
     async createVM(config) {
-        return this.send('create-vm', config);
+        // VM creation can take a long time (disk creation, etc.)
+        return this.send('create-vm', config, 300000);
     }
 
     async startVM(serverId, userId) {
@@ -253,6 +279,8 @@ export class NodeClient extends EventEmitter {
     }
 
     disconnect() {
+        this.stopPing();
+        
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
