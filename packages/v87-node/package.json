@@ -1,0 +1,30 @@
+{
+  "name": "v87-node",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "V87 Node daemon - runs QEMU VMs and communicates with V87 panel",
+  "main": "src/index.js",
+  "bin": {
+    "v87-node": "./bin/v87-node.js"
+  },
+  "scripts": {
+    "start": "node bin/v87-node.js",
+    "dev": "node --watch bin/v87-node.js"
+  },
+  "keywords": [
+    "v87",
+    "node",
+    "qemu",
+    "vm",
+    "virtualization"
+  ],
+  "author": "zt3xdv",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "fs-extra": "^11.3.0"
+  }
+}

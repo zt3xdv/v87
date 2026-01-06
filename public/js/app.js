@@ -550,6 +550,51 @@ const App = {
                     imageSelect.appendChild(opt);
                 });
             }
+            
+            const loadNodes = async () => {
+                const ram = parseInt(ramInput.value) || 1024;
+                const disk = parseInt(diskInput.value) || 10;
+                const cpu = Math.ceil((parseInt(cpuInput.value) || 100) / 100);
+                
+                try {
+                    const nodesRes = await fetch(`/api/nodes?ram=${ram}&disk=${disk}&cpu=${cpu}`, {
+                        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                    });
+                    const nodesData = await nodesRes.json();
+                    
+                    const nodeSelect = document.getElementById('c-node');
+                    const nodeGroup = document.getElementById('node-select-group');
+                    const hint = document.getElementById('node-availability-hint');
+                    
+                    if (nodesData.nodes && nodesData.nodes.length > 0) {
+                        nodeGroup.style.display = 'block';
+                        nodeSelect.innerHTML = '<option value="">Auto-select (best available)</option>';
+                        
+                        nodesData.nodes.forEach(n => {
+                            const opt = document.createElement('option');
+                            opt.value = n.id;
+                            opt.textContent = `${n.name} (${n.region}) - ${n.availability?.ram?.available}MB free`;
+                            if (!n.online) {
+                                opt.textContent += ' [OFFLINE]';
+                                opt.disabled = true;
+                            }
+                            nodeSelect.appendChild(opt);
+                        });
+                        
+                        hint.textContent = `${nodesData.nodes.filter(n => n.online).length} node(s) available for this configuration`;
+                    } else {
+                        nodeGroup.style.display = 'none';
+                        hint.textContent = '';
+                    }
+                } catch (e) {
+                    console.error('Failed to load nodes', e);
+                }
+            };
+            
+            loadNodes();
+            ramInput.addEventListener('change', loadNodes);
+            diskInput.addEventListener('change', loadNodes);
+            cpuInput.addEventListener('change', loadNodes);
 
             document.getElementById('create-server-form').onsubmit = async (e) => {
                 e.preventDefault();
@@ -562,6 +607,7 @@ const App = {
                 }
                 
                 const diskValue = parseInt(document.getElementById('c-disk').value) || 10;
+                const nodeId = document.getElementById('c-node')?.value || null;
                 const payload = {
                     name: document.getElementById('c-name').value,
                     description: document.getElementById('c-desc').value,
@@ -571,6 +617,7 @@ const App = {
                     cpuLimit: parseInt(document.getElementById('c-cpu').value) || 100,
                     ioLimit: parseInt(document.getElementById('c-io').value) || 0
                 };
+                if (nodeId) payload.nodeId = nodeId;
                 
                 const r = await fetch('/api/server/create', {
                     method: 'POST',
@@ -1266,11 +1313,13 @@ const App = {
         container.innerHTML = '';
         container.appendChild(tmpl);
         
-        const tabs = ['servers', 'users', 'audit', 'maintenance', 'config'];
+        const tabs = ['servers', 'users', 'nodes', 'audit', 'maintenance', 'config'];
         tabs.forEach(t => {
             const btn = document.getElementById(`tab-${t}`);
-            btn.className = `tab-btn ${t === tab ? 'active' : ''}`;
-            btn.onclick = () => App.navigate(`/admin/${t}`);
+            if (btn) {
+                btn.className = `tab-btn ${t === tab ? 'active' : ''}`;
+                btn.onclick = () => App.navigate(`/admin/${t}`);
+            }
         });
         
         const content = document.getElementById('admin-content');
@@ -1279,6 +1328,8 @@ const App = {
             await App.renderAdminServers(content);
         } else if (tab === 'users') {
             await App.renderAdminUsers(content);
+        } else if (tab === 'nodes') {
+            await App.renderAdminNodes(content);
         } else if (tab === 'audit') {
             await App.renderAdminAudit(content);
         } else if (tab === 'maintenance') {
@@ -1381,6 +1432,242 @@ const App = {
         };
         
         loadUsers();
+    },
+    
+    renderAdminNodes: async (container) => {
+        container.innerHTML = `
+            <div class="admin-section">
+                <div class="section-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                    <h3>Nodes</h3>
+                    <button id="btn-add-node" class="btn btn-primary btn-sm">
+                        <span class="material-symbols-outlined icon-sm">add</span> Add Node
+                    </button>
+                </div>
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Region</th>
+                            <th>Status</th>
+                            <th>RAM</th>
+                            <th>Disk</th>
+                            <th>Servers</th>
+                            <th style="text-align:right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="admin-nodes-list"></tbody>
+                </table>
+            </div>
+        `;
+        
+        const loadNodes = async () => {
+            const tbody = document.getElementById('admin-nodes-list');
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center">Loading...</td></tr>';
+            
+            try {
+                const r = await fetch('/api/admin/nodes', {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const data = await r.json();
+                
+                tbody.innerHTML = '';
+                if (data.nodes.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No nodes configured</td></tr>';
+                    return;
+                }
+                
+                data.nodes.forEach(n => {
+                    const ramUsed = n.availability?.ram?.used || 0;
+                    const ramTotal = n.maxRam || 0;
+                    const diskUsed = n.availability?.disk?.used || 0;
+                    const diskTotal = n.maxDisk || 0;
+                    const srvCount = n.availability?.servers?.count || 0;
+                    const srvMax = n.maxServers || 0;
+                    
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = \`
+                        <td><strong>\${n.name}</strong></td>
+                        <td>\${n.region || 'default'}</td>
+                        <td>
+                            <span class="badge \${n.online ? 'running' : 'stopped'}">
+                                \${n.online ? 'ONLINE' : 'OFFLINE'}
+                            </span>
+                            \${!n.enabled ? '<span class="badge suspended">DISABLED</span>' : ''}
+                        </td>
+                        <td>\${ramUsed}MB / \${ramTotal}MB</td>
+                        <td>\${diskUsed}GB / \${diskTotal}GB</td>
+                        <td>\${srvCount} / \${srvMax}</td>
+                        <td style="text-align:right">
+                            <button class="btn btn-sm btn-secondary edit-btn">Edit</button>
+                            <button class="btn btn-sm btn-secondary reconnect-btn" title="Reconnect">
+                                <span class="material-symbols-outlined icon-sm">refresh</span>
+                            </button>
+                        </td>
+                    \`;
+                    tr.querySelector('.edit-btn').onclick = () => App.openNodeEditModal(n.id, loadNodes);
+                    tr.querySelector('.reconnect-btn').onclick = async () => {
+                        await fetch(\`/api/admin/nodes/\${n.id}/reconnect\`, {
+                            method: 'POST',
+                            headers: { 'Authorization': \`Bearer \${localStorage.getItem('token')}\` }
+                        });
+                        setTimeout(loadNodes, 1000);
+                    };
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                console.error(e);
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">Error loading nodes</td></tr>';
+            }
+        };
+        
+        document.getElementById('btn-add-node').onclick = () => App.openNodeEditModal(null, loadNodes);
+        
+        loadNodes();
+    },
+    
+    openNodeEditModal: async (nodeId, onSave) => {
+        const isNew = !nodeId;
+        let node = { name: '', url: '', secret: '', region: 'default', maxRam: 8192, maxDisk: 100, maxCpu: 8, maxServers: 10, enabled: true };
+        
+        if (!isNew) {
+            try {
+                const r = await fetch(\`/api/admin/nodes/\${nodeId}\`, {
+                    headers: { 'Authorization': \`Bearer \${localStorage.getItem('token')}\` }
+                });
+                node = await r.json();
+            } catch (e) {
+                Dialog.warning('Failed to load node', 'Error');
+                return;
+            }
+        }
+        
+        const modalHtml = \`
+            <div class="modal-overlay" id="node-modal">
+                <div class="modal-content" style="max-width:500px">
+                    <div class="modal-header">
+                        <h3>\${isNew ? 'Add Node' : 'Edit Node'}</h3>
+                        <button class="btn-close" onclick="document.getElementById('node-modal').remove()">&times;</button>
+                    </div>
+                    <form id="node-form">
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" id="node-name" class="form-control" value="\${node.name}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>WebSocket URL</label>
+                            <input type="text" id="node-url" class="form-control" value="\${node.url || ''}" placeholder="ws://host:7000" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Secret Key</label>
+                            <input type="text" id="node-secret" class="form-control" value="" placeholder="\${isNew ? 'Required' : 'Leave empty to keep current'}">
+                        </div>
+                        <div class="form-group">
+                            <label>Region</label>
+                            <input type="text" id="node-region" class="form-control" value="\${node.region || 'default'}">
+                        </div>
+                        <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                            <div class="form-group">
+                                <label>Max RAM (MB)</label>
+                                <input type="number" id="node-maxram" class="form-control" value="\${node.maxRam || 8192}">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Disk (GB)</label>
+                                <input type="number" id="node-maxdisk" class="form-control" value="\${node.maxDisk || 100}">
+                            </div>
+                        </div>
+                        <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                            <div class="form-group">
+                                <label>Max CPU Cores</label>
+                                <input type="number" id="node-maxcpu" class="form-control" value="\${node.maxCpu || 8}">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Servers</label>
+                                <input type="number" id="node-maxservers" class="form-control" value="\${node.maxServers || 10}">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="node-enabled" \${node.enabled ? 'checked' : ''}> Enabled
+                            </label>
+                        </div>
+                        <div class="modal-footer" style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+                            \${!isNew ? '<button type="button" id="btn-delete-node" class="btn btn-danger">Delete</button>' : ''}
+                            <button type="button" onclick="document.getElementById('node-modal').remove()" class="btn btn-secondary">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        \`;
+        
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        
+        document.getElementById('node-form').onsubmit = async (e) => {
+            e.preventDefault();
+            
+            const payload = {
+                name: document.getElementById('node-name').value,
+                url: document.getElementById('node-url').value,
+                region: document.getElementById('node-region').value,
+                maxRam: parseInt(document.getElementById('node-maxram').value),
+                maxDisk: parseInt(document.getElementById('node-maxdisk').value),
+                maxCpu: parseInt(document.getElementById('node-maxcpu').value),
+                maxServers: parseInt(document.getElementById('node-maxservers').value),
+                enabled: document.getElementById('node-enabled').checked
+            };
+            
+            const secret = document.getElementById('node-secret').value;
+            if (secret || isNew) {
+                payload.secret = secret;
+            }
+            
+            try {
+                const r = await fetch(isNew ? '/api/admin/nodes' : \`/api/admin/nodes/\${nodeId}\`, {
+                    method: isNew ? 'POST' : 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': \`Bearer \${localStorage.getItem('token')}\`
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!r.ok) {
+                    const err = await r.json();
+                    Dialog.warning(err.error || 'Failed to save node', 'Error');
+                    return;
+                }
+                
+                document.getElementById('node-modal').remove();
+                onSave && onSave();
+            } catch (e) {
+                Dialog.warning('Failed to save node', 'Error');
+            }
+        };
+        
+        if (!isNew) {
+            document.getElementById('btn-delete-node').onclick = async () => {
+                const confirmed = await Dialog.confirm('Delete this node? VMs must be migrated first.', 'Delete Node', { danger: true, confirmText: 'Delete' });
+                if (!confirmed) return;
+                
+                try {
+                    const r = await fetch(\`/api/admin/nodes/\${nodeId}\`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': \`Bearer \${localStorage.getItem('token')}\` }
+                    });
+                    
+                    if (!r.ok) {
+                        const err = await r.json();
+                        Dialog.warning(err.error || 'Failed to delete node', 'Error');
+                        return;
+                    }
+                    
+                    document.getElementById('node-modal').remove();
+                    onSave && onSave();
+                } catch (e) {
+                    Dialog.warning('Failed to delete node', 'Error');
+                }
+            };
+        }
     },
     
     renderAdminConfig: async (container) => {

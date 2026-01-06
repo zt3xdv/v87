@@ -19,6 +19,7 @@ import { generateToken, verifyToken } from './utils/token.js';
 import { requireAuth, requireAdmin, invalidateUserTokens } from './utils/authMiddleware.js';
 import { SandboxManager } from '../sandbox/sandbox-manager.js';
 import { getImages, getImage } from '../sandbox/images.js';
+import { NodeManager } from './utils/node-client.js';
 
 const TERM_GRAY = "\x1b[90m";
 const TERM_RESET = "\x1b[0m";
@@ -85,6 +86,47 @@ const sandboxManager = new SandboxManager({
     timeout: config.vm?.timeout || 0,
     qemuPath: config.vm?.qemuPath || 'qemu-system-x86_64',
     enableKvm: config.vm?.enableKvm === true
+});
+
+const nodeManager = new NodeManager();
+
+function initializeNodes() {
+    const nodes = db.getNodes();
+    for (const node of nodes) {
+        if (node.enabled) {
+            nodeManager.addNode({
+                id: node.id,
+                url: node.url,
+                secret: node.secret
+            });
+            log(`Connecting to node: ${node.name} (${node.id})`);
+        }
+    }
+}
+
+nodeManager.on('node-connected', (nodeId) => {
+    const node = db.getNode(nodeId);
+    log(`Node connected: ${node?.name || nodeId}`);
+    db.updateNode(nodeId, { lastSeen: new Date().toISOString(), status: 'online' });
+});
+
+nodeManager.on('node-disconnected', (nodeId) => {
+    const node = db.getNode(nodeId);
+    log(`Node disconnected: ${node?.name || nodeId}`);
+    db.updateNode(nodeId, { status: 'offline' });
+});
+
+nodeManager.on('node-error', (nodeId, err) => {
+    log(`Node error (${nodeId}): ${err.message}`);
+});
+
+nodeManager.on('vm-output', (nodeId, serverId, data) => {
+    io.to(`server:${serverId}`).emit('term-data', data);
+});
+
+nodeManager.on('vm-status', (nodeId, serverId, status) => {
+    io.to(`server:${serverId}`).emit('vm-status', status === 'running' ? 'started' : 'stopped');
+    db.updateServer(serverId, { status: status === 'running' ? 'running' : 'stopped' });
 });
 
 const DATA_DIR = path.join(__dirname, '../../data');
@@ -611,7 +653,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
 
 app.post('/api/server/create', requireAuth, async (req, res, next) => {
     try {
-        const { name, description, imageId } = req.body;
+        const { name, description, imageId, nodeId } = req.body;
         const user = db.findUserById(req.user.id);
         const servers = db.getUserServers(user.id);
         const userLimits = getUserLimits(user);
@@ -656,6 +698,55 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
         const diskSize = `${diskSizeNum}G`;
         const serverId = Date.now().toString();
         
+        let selectedNode = null;
+        const nodes = db.getNodes().filter(n => n.enabled);
+        
+        if (nodes.length > 0) {
+            if (nodeId) {
+                selectedNode = db.getNode(nodeId);
+                if (!selectedNode || !selectedNode.enabled) {
+                    return res.status(400).json({ error: 'Invalid or disabled node' });
+                }
+            } else {
+                const cpuCores = Math.ceil(cpuLimit / 100);
+                const availableNodes = nodes.filter(n => {
+                    const usage = db.getNodeUsage(n.id);
+                    return (
+                        (n.maxRam - usage.ram) >= ram &&
+                        (n.maxDisk - usage.disk) >= diskSizeNum &&
+                        (n.maxCpu - usage.cpu) >= cpuCores &&
+                        (n.maxServers - usage.count) >= 1 &&
+                        nodeManager.isNodeConnected(n.id)
+                    );
+                });
+                
+                if (availableNodes.length === 0) {
+                    return res.status(400).json({ error: 'No slots left. All nodes are at capacity.' });
+                }
+                
+                selectedNode = availableNodes[0];
+            }
+            
+            if (selectedNode) {
+                const cpuCores = Math.ceil(cpuLimit / 100);
+                const usage = db.getNodeUsage(selectedNode.id);
+                const canFit = (
+                    (selectedNode.maxRam - usage.ram) >= ram &&
+                    (selectedNode.maxDisk - usage.disk) >= diskSizeNum &&
+                    (selectedNode.maxCpu - usage.cpu) >= cpuCores &&
+                    (selectedNode.maxServers - usage.count) >= 1
+                );
+                
+                if (!canFit) {
+                    return res.status(400).json({ error: 'No slots left on selected node.' });
+                }
+                
+                if (!nodeManager.isNodeConnected(selectedNode.id)) {
+                    return res.status(400).json({ error: 'Selected node is offline.' });
+                }
+            }
+        }
+        
         const serverData = {
             id: serverId,
             ownerId: user.id,
@@ -665,29 +756,53 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
             ram,
             diskSize,
             cpuLimit,
+            cpuCores: Math.ceil(cpuLimit / 100),
             ioLimit,
+            nodeId: selectedNode?.id || null,
+            nodeName: selectedNode?.name || null,
             created_at: new Date(),
             status: 'creating'
         };
         
         db.addServer(serverData);
-        log(`Server ${serverId} creation started for user ${user.username}`);
-        audit(user.id, user.username, 'vm_create', { serverId, serverName: serverData.name, imageId: image.id });
-        triggerWebhooks('vm_create', { serverId, serverName: serverData.name, userId: user.id, imageId: image.id });
+        log(`Server ${serverId} creation started for user ${user.username}${selectedNode ? ` on node ${selectedNode.name}` : ''}`);
+        audit(user.id, user.username, 'vm_create', { serverId, serverName: serverData.name, imageId: image.id, nodeId: selectedNode?.id });
+        triggerWebhooks('vm_create', { serverId, serverName: serverData.name, userId: user.id, imageId: image.id, nodeId: selectedNode?.id });
         
-        sandboxManager.createServer(user.id, serverId, {
-            imageId: image.id,
-            ram: serverData.ram,
-            diskSize: serverData.diskSize,
-            cpuLimit,
-            ioLimit
-        }).then(() => {
-            db.updateServer(serverId, { status: 'stopped' });
-            log(`Server ${serverId} created successfully`);
-        }).catch((err) => {
-            db.updateServer(serverId, { status: 'error', error: err.message });
-            log(`Server ${serverId} creation failed: ${err.message}`);
-        });
+        if (selectedNode) {
+            const client = nodeManager.getClient(selectedNode.id);
+            client.createVM({
+                serverId,
+                userId: user.id,
+                imageId: image.id,
+                ram: serverData.ram,
+                disk: serverData.diskSize,
+                cpuCores: serverData.cpuCores
+            }).then((result) => {
+                db.updateServer(serverId, { 
+                    status: 'stopped',
+                    password: result.password
+                });
+                log(`Server ${serverId} created on node ${selectedNode.name}`);
+            }).catch((err) => {
+                db.updateServer(serverId, { status: 'error', error: err.message });
+                log(`Server ${serverId} creation failed on node: ${err.message}`);
+            });
+        } else {
+            sandboxManager.createServer(user.id, serverId, {
+                imageId: image.id,
+                ram: serverData.ram,
+                diskSize: serverData.diskSize,
+                cpuLimit,
+                ioLimit
+            }).then(() => {
+                db.updateServer(serverId, { status: 'stopped' });
+                log(`Server ${serverId} created successfully (local)`);
+            }).catch((err) => {
+                db.updateServer(serverId, { status: 'error', error: err.message });
+                log(`Server ${serverId} creation failed: ${err.message}`);
+            });
+        }
         
         res.json({ success: true, server: serverData });
         
@@ -786,7 +901,16 @@ app.post('/api/server/:id/start', requireAuth, async (req, res, next) => {
         }
         
         log(`Starting VM ${serverId}`);
-        await sandboxManager.startServer(serverData.ownerId, serverId);
+        
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.status(400).json({ error: 'Node is offline' });
+            }
+            await client.startVM(serverId, serverData.ownerId);
+        } else {
+            await sandboxManager.startServer(serverData.ownerId, serverId);
+        }
         
         db.updateServer(serverId, { status: 'running' });
         io.to(`server:${serverId}`).emit('vm-status', 'started');
@@ -807,7 +931,14 @@ app.post('/api/server/:id/stop', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
 
-        sandboxManager.stopServer(serverId);
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                await client.stopVM(serverId);
+            }
+        } else {
+            sandboxManager.stopServer(serverId);
+        }
         
         db.updateServer(serverId, { status: 'stopped' });
         audit(req.user.id, req.user.username, 'vm_stop', { serverId, serverName: serverData.name });
@@ -829,8 +960,15 @@ app.delete('/api/server/:id', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        sandboxManager.stopServer(serverId);
-        await sandboxManager.deleteServer(serverData.ownerId, serverId);
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                await client.deleteVM(serverId, serverData.ownerId);
+            }
+        } else {
+            sandboxManager.stopServer(serverId);
+            await sandboxManager.deleteServer(serverData.ownerId, serverId);
+        }
         
         db.deleteServer(serverId);
         audit(req.user.id, req.user.username, 'vm_delete', { serverId, serverName: serverData.name });
@@ -1425,6 +1563,320 @@ app.post('/api/admin/user/:id/revoke-tokens', requireAdmin, (req, res) => {
     log(`Admin ${req.user.username} revoked all tokens for user ${user.username}`);
     
     res.json({ success: true, message: `All sessions for ${user.username} have been logged out` });
+});
+
+// =====================
+// NODES MANAGEMENT
+// =====================
+
+function calculateNodeAvailability(node) {
+    const usage = db.getNodeUsage(node.id);
+    return {
+        ram: {
+            used: usage.ram,
+            total: node.maxRam || 0,
+            available: Math.max(0, (node.maxRam || 0) - usage.ram)
+        },
+        disk: {
+            used: usage.disk,
+            total: node.maxDisk || 0,
+            available: Math.max(0, (node.maxDisk || 0) - usage.disk)
+        },
+        cpu: {
+            used: usage.cpu,
+            total: node.maxCpu || 0,
+            available: Math.max(0, (node.maxCpu || 0) - usage.cpu)
+        },
+        servers: {
+            count: usage.count,
+            max: node.maxServers || 0,
+            available: Math.max(0, (node.maxServers || 0) - usage.count)
+        }
+    };
+}
+
+function canFitOnNode(node, ram, disk, cpu) {
+    const availability = calculateNodeAvailability(node);
+    return (
+        availability.ram.available >= ram &&
+        availability.disk.available >= disk &&
+        availability.cpu.available >= cpu &&
+        availability.servers.available >= 1
+    );
+}
+
+function findAvailableNodes(ram, disk, cpu) {
+    const nodes = db.getNodes().filter(n => n.enabled);
+    return nodes.filter(n => canFitOnNode(n, ram, disk, cpu)).map(n => ({
+        ...n,
+        secret: undefined,
+        availability: calculateNodeAvailability(n),
+        online: nodeManager.isNodeConnected(n.id)
+    }));
+}
+
+app.get('/api/admin/nodes', requireAdmin, async (req, res) => {
+    const nodes = db.getNodes();
+    const enriched = await Promise.all(nodes.map(async (node) => {
+        const online = nodeManager.isNodeConnected(node.id);
+        const availability = calculateNodeAvailability(node);
+        
+        let nodeStatus = null;
+        if (online) {
+            try {
+                nodeStatus = await nodeManager.getNodeStatus(node.id);
+            } catch {}
+        }
+        
+        return {
+            ...node,
+            secret: '••••••••',
+            online,
+            availability,
+            nodeStatus
+        };
+    }));
+    
+    res.json({ nodes: enriched });
+});
+
+app.post('/api/admin/nodes', requireAdmin, (req, res) => {
+    const { name, url, secret, region, maxRam, maxDisk, maxCpu, maxServers } = req.body;
+    
+    if (!name || !url || !secret) {
+        return res.status(400).json({ error: 'name, url, and secret are required' });
+    }
+    
+    if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+        return res.status(400).json({ error: 'URL must start with ws:// or wss://' });
+    }
+    
+    const node = {
+        id: crypto.randomBytes(8).toString('hex'),
+        name,
+        url,
+        secret,
+        region: region || 'default',
+        maxRam: maxRam || 8192,
+        maxDisk: maxDisk || 100,
+        maxCpu: maxCpu || 8,
+        maxServers: maxServers || 10,
+        enabled: true,
+        status: 'offline',
+        createdAt: new Date().toISOString()
+    };
+    
+    db.createNode(node);
+    
+    nodeManager.addNode({
+        id: node.id,
+        url: node.url,
+        secret: node.secret
+    });
+    
+    audit(req.user.id, req.user.username, 'node_created', { nodeId: node.id, nodeName: name });
+    log(`Node created: ${name} (${node.id})`);
+    
+    res.json({ success: true, node: { ...node, secret: '••••••••' } });
+});
+
+app.get('/api/admin/nodes/:id', requireAdmin, async (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    const online = nodeManager.isNodeConnected(node.id);
+    const availability = calculateNodeAvailability(node);
+    const servers = db.getNodeServers(node.id);
+    
+    let nodeStatus = null;
+    let images = [];
+    
+    if (online) {
+        try {
+            const client = nodeManager.getClient(node.id);
+            nodeStatus = await client.getStatus();
+            images = await client.listImages();
+        } catch {}
+    }
+    
+    res.json({
+        ...node,
+        secret: '••••••••',
+        online,
+        availability,
+        nodeStatus,
+        images,
+        servers: servers.map(s => ({
+            id: s.id,
+            name: s.name,
+            status: s.status,
+            ram: s.ram,
+            disk: s.disk
+        }))
+    });
+});
+
+app.put('/api/admin/nodes/:id', requireAdmin, (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    const { name, url, secret, region, maxRam, maxDisk, maxCpu, maxServers, enabled } = req.body;
+    
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (url !== undefined) updates.url = url;
+    if (secret !== undefined) updates.secret = secret;
+    if (region !== undefined) updates.region = region;
+    if (maxRam !== undefined) updates.maxRam = maxRam;
+    if (maxDisk !== undefined) updates.maxDisk = maxDisk;
+    if (maxCpu !== undefined) updates.maxCpu = maxCpu;
+    if (maxServers !== undefined) updates.maxServers = maxServers;
+    if (enabled !== undefined) updates.enabled = enabled;
+    
+    const updated = db.updateNode(req.params.id, updates);
+    
+    if (url !== undefined || secret !== undefined || enabled !== undefined) {
+        nodeManager.removeNode(node.id);
+        if (updated.enabled) {
+            nodeManager.addNode({
+                id: updated.id,
+                url: updated.url,
+                secret: updated.secret
+            });
+        }
+    }
+    
+    audit(req.user.id, req.user.username, 'node_updated', { nodeId: node.id });
+    
+    res.json({ success: true, node: { ...updated, secret: '••••••••' } });
+});
+
+app.delete('/api/admin/nodes/:id', requireAdmin, (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    const servers = db.getNodeServers(node.id);
+    if (servers.length > 0) {
+        return res.status(400).json({ 
+            error: `Cannot delete node with ${servers.length} servers. Migrate or delete them first.` 
+        });
+    }
+    
+    nodeManager.removeNode(node.id);
+    db.deleteNode(node.id);
+    
+    audit(req.user.id, req.user.username, 'node_deleted', { nodeId: node.id, nodeName: node.name });
+    log(`Node deleted: ${node.name} (${node.id})`);
+    
+    res.json({ success: true });
+});
+
+app.post('/api/admin/nodes/:id/reconnect', requireAdmin, (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    nodeManager.removeNode(node.id);
+    nodeManager.addNode({
+        id: node.id,
+        url: node.url,
+        secret: node.secret
+    });
+    
+    res.json({ success: true, message: 'Reconnection initiated' });
+});
+
+app.post('/api/admin/nodes/:id/download-image', requireAdmin, async (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    const client = nodeManager.getClient(node.id);
+    if (!client || !client.isConnected()) {
+        return res.status(400).json({ error: 'Node is offline' });
+    }
+    
+    const { imageId } = req.body;
+    if (!imageId) {
+        return res.status(400).json({ error: 'imageId required' });
+    }
+    
+    const image = getImage(imageId);
+    if (!image) {
+        return res.status(400).json({ error: 'Image not found' });
+    }
+    
+    try {
+        await client.downloadImage(imageId, image.url, image.name);
+        res.json({ success: true, message: 'Download started' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/admin/nodes/:id/images', requireAdmin, async (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    const client = nodeManager.getClient(node.id);
+    if (!client || !client.isConnected()) {
+        return res.status(400).json({ error: 'Node is offline' });
+    }
+    
+    try {
+        const images = await client.listImages();
+        res.json({ images });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/nodes', requireAuth, (req, res) => {
+    const { ram, disk, cpu } = req.query;
+    
+    const ramMb = parseInt(ram) || 1024;
+    const diskGb = parseInt(disk) || 10;
+    const cpuCores = parseInt(cpu) || 1;
+    
+    const available = findAvailableNodes(ramMb, diskGb, cpuCores);
+    
+    res.json({ 
+        nodes: available.map(n => ({
+            id: n.id,
+            name: n.name,
+            region: n.region,
+            online: n.online,
+            availability: n.availability
+        }))
+    });
+});
+
+app.get('/api/nodes/:id/availability', requireAuth, (req, res) => {
+    const node = db.getNode(req.params.id);
+    if (!node || !node.enabled) {
+        return res.status(404).json({ error: 'Node not found' });
+    }
+    
+    const availability = calculateNodeAvailability(node);
+    const online = nodeManager.isNodeConnected(node.id);
+    
+    res.json({
+        id: node.id,
+        name: node.name,
+        region: node.region,
+        online,
+        availability
+    });
 });
 
 // =====================
@@ -2401,6 +2853,7 @@ app.use((req, res) => {
 
 process.on('SIGTERM', () => {
     log('SIGTERM received, shutting down...');
+    nodeManager.shutdown();
     sandboxManager.shutdown();
     server.close(() => {
         process.exit(0);
@@ -2409,6 +2862,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
     log('SIGINT received, shutting down...');
+    nodeManager.shutdown();
     sandboxManager.shutdown();
     server.close(() => {
         process.exit(0);
@@ -2417,4 +2871,5 @@ process.on('SIGINT', () => {
 
 server.listen(PORT, () => {
     log(`V87 Panel running on port ${PORT}`);
+    initializeNodes();
 });

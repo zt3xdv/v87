@@ -13,6 +13,7 @@ const WEBHOOKS_FILE = path.join(DATA_DIR, 'webhooks.json');
 const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
+const NODES_FILE = path.join(DATA_DIR, 'nodes.json');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
@@ -24,6 +25,7 @@ if (!fs.existsSync(WEBHOOKS_FILE)) fs.writeFileSync(WEBHOOKS_FILE, '[]');
 if (!fs.existsSync(ALERTS_FILE)) fs.writeFileSync(ALERTS_FILE, '[]');
 if (!fs.existsSync(SETTINGS_FILE)) fs.writeFileSync(SETTINGS_FILE, '{}');
 if (!fs.existsSync(METRICS_FILE)) fs.writeFileSync(METRICS_FILE, '{}');
+if (!fs.existsSync(NODES_FILE)) fs.writeFileSync(NODES_FILE, '[]');
 
 function load(file) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -310,5 +312,45 @@ export default {
         const metrics = load(METRICS_FILE);
         delete metrics[serverId];
         save(METRICS_FILE, metrics);
+    },
+    
+    // Nodes
+    getNodes: () => load(NODES_FILE),
+    
+    getNode: (id) => load(NODES_FILE).find(n => n.id === id),
+    
+    createNode: (node) => {
+        const nodes = load(NODES_FILE);
+        nodes.push(node);
+        save(NODES_FILE, nodes);
+        return node;
+    },
+    
+    updateNode: (id, updates) => {
+        const nodes = load(NODES_FILE);
+        const index = nodes.findIndex(n => n.id === id);
+        if (index !== -1) {
+            nodes[index] = { ...nodes[index], ...updates };
+            save(NODES_FILE, nodes);
+            return nodes[index];
+        }
+        return null;
+    },
+    
+    deleteNode: (id) => {
+        const nodes = load(NODES_FILE).filter(n => n.id !== id);
+        save(NODES_FILE, nodes);
+    },
+    
+    getNodeServers: (nodeId) => load(SERVERS_FILE).filter(s => s.nodeId === nodeId),
+    
+    getNodeUsage: (nodeId) => {
+        const servers = load(SERVERS_FILE).filter(s => s.nodeId === nodeId);
+        return {
+            ram: servers.reduce((acc, s) => acc + (s.ram || 0), 0),
+            disk: servers.reduce((acc, s) => acc + (parseFloat(s.disk) || 0), 0),
+            cpu: servers.reduce((acc, s) => acc + (s.cpuCores || 1), 0),
+            count: servers.length
+        };
     },
 };
