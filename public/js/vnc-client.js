@@ -78,6 +78,13 @@ class VNCClient {
         this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e), { passive: false });
         this.canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
         this.canvas.addEventListener('touchend', (e) => this.handleTouchEnd(e), { passive: false });
+        
+        // Mobile toolbar
+        this.modifierState = { ctrl: false, alt: false, shift: false };
+        this.isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (this.isMobile) {
+            this.createMobileToolbar();
+        }
         this.canvas.addEventListener('touchcancel', (e) => this.handleTouchEnd(e), { passive: false });
         
         window.addEventListener('resize', () => this.fitToContainer());
@@ -948,6 +955,251 @@ class VNCClient {
         this.disconnect();
         if (this.canvas && this.canvas.parentNode) {
             this.canvas.parentNode.removeChild(this.canvas);
+        }
+        if (this.toolbar && this.toolbar.parentNode) {
+            this.toolbar.parentNode.removeChild(this.toolbar);
+        }
+        if (this.hiddenInput && this.hiddenInput.parentNode) {
+            this.hiddenInput.parentNode.removeChild(this.hiddenInput);
+        }
+    }
+    
+    createMobileToolbar() {
+        // Hidden input for keyboard
+        this.hiddenInput = document.createElement('input');
+        this.hiddenInput.type = 'text';
+        this.hiddenInput.autocomplete = 'off';
+        this.hiddenInput.autocapitalize = 'none';
+        this.hiddenInput.autocorrect = 'off';
+        this.hiddenInput.spellcheck = false;
+        this.hiddenInput.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;';
+        this.container.appendChild(this.hiddenInput);
+        
+        this.hiddenInput.addEventListener('input', (e) => {
+            const text = e.target.value;
+            if (text) {
+                for (const char of text) {
+                    this.sendKey(char.charCodeAt(0), true);
+                    this.sendKey(char.charCodeAt(0), false);
+                }
+                e.target.value = '';
+            }
+        });
+        
+        this.hiddenInput.addEventListener('keydown', (e) => {
+            if (['Backspace', 'Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                e.preventDefault();
+                const keyCode = this.jsKeyToX11(e.key, e.code, e.keyCode);
+                if (keyCode) {
+                    this.sendKey(keyCode, true);
+                    this.sendKey(keyCode, false);
+                }
+            }
+        });
+        
+        // Toolbar container
+        this.toolbar = document.createElement('div');
+        this.toolbar.className = 'vnc-mobile-toolbar';
+        this.toolbar.style.cssText = `
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.85);
+            padding: 8px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        `;
+        
+        const buttons = [
+            { icon: '⌨️', label: 'Keyboard', action: () => this.toggleKeyboard() },
+            { icon: 'Esc', label: 'Escape', action: () => this.sendSpecialKey('Escape') },
+            { icon: 'Tab', label: 'Tab', action: () => this.sendSpecialKey('Tab') },
+            { icon: 'Ctrl', label: 'Ctrl', toggle: 'ctrl' },
+            { icon: 'Alt', label: 'Alt', toggle: 'alt' },
+            { icon: 'Shift', label: 'Shift', toggle: 'shift' },
+            { icon: '↑', label: 'Up', action: () => this.sendSpecialKey('ArrowUp') },
+            { icon: '↓', label: 'Down', action: () => this.sendSpecialKey('ArrowDown') },
+            { icon: '←', label: 'Left', action: () => this.sendSpecialKey('ArrowLeft') },
+            { icon: '→', label: 'Right', action: () => this.sendSpecialKey('ArrowRight') },
+            { icon: 'F1', label: 'F1', action: () => this.sendSpecialKey('F1') },
+            { icon: '⋯', label: 'More', action: () => this.toggleExtraButtons() },
+        ];
+        
+        this.toolbarButtons = {};
+        
+        buttons.forEach(btn => {
+            const button = document.createElement('button');
+            button.textContent = btn.icon;
+            button.title = btn.label;
+            button.style.cssText = `
+                background: #333;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 6px;
+                padding: 10px 14px;
+                font-size: 14px;
+                font-family: inherit;
+                cursor: pointer;
+                min-width: 44px;
+                touch-action: manipulation;
+                user-select: none;
+                -webkit-user-select: none;
+            `;
+            
+            if (btn.toggle) {
+                this.toolbarButtons[btn.toggle] = button;
+                button.addEventListener('click', () => this.toggleModifier(btn.toggle));
+            } else if (btn.action) {
+                button.addEventListener('click', btn.action);
+            }
+            
+            this.toolbar.appendChild(button);
+        });
+        
+        // Extra buttons panel (hidden by default)
+        this.extraPanel = document.createElement('div');
+        this.extraPanel.style.cssText = `
+            display: none;
+            width: 100%;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 6px;
+        `;
+        
+        const extraButtons = [
+            { icon: 'F2', action: () => this.sendSpecialKey('F2') },
+            { icon: 'F3', action: () => this.sendSpecialKey('F3') },
+            { icon: 'F4', action: () => this.sendSpecialKey('F4') },
+            { icon: 'F5', action: () => this.sendSpecialKey('F5') },
+            { icon: 'F6', action: () => this.sendSpecialKey('F6') },
+            { icon: 'F7', action: () => this.sendSpecialKey('F7') },
+            { icon: 'F8', action: () => this.sendSpecialKey('F8') },
+            { icon: 'F9', action: () => this.sendSpecialKey('F9') },
+            { icon: 'F10', action: () => this.sendSpecialKey('F10') },
+            { icon: 'F11', action: () => this.sendSpecialKey('F11') },
+            { icon: 'F12', action: () => this.sendSpecialKey('F12') },
+            { icon: 'Ins', action: () => this.sendSpecialKey('Insert') },
+            { icon: 'Del', action: () => this.sendSpecialKey('Delete') },
+            { icon: 'Home', action: () => this.sendSpecialKey('Home') },
+            { icon: 'End', action: () => this.sendSpecialKey('End') },
+            { icon: 'PgUp', action: () => this.sendSpecialKey('PageUp') },
+            { icon: 'PgDn', action: () => this.sendSpecialKey('PageDown') },
+            { icon: 'C-A-Del', action: () => this.sendCtrlAltDel() },
+        ];
+        
+        extraButtons.forEach(btn => {
+            const button = document.createElement('button');
+            button.textContent = btn.icon;
+            button.style.cssText = `
+                background: #333;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 12px;
+                font-family: inherit;
+                cursor: pointer;
+                min-width: 40px;
+                touch-action: manipulation;
+                user-select: none;
+                -webkit-user-select: none;
+            `;
+            button.addEventListener('click', btn.action);
+            this.extraPanel.appendChild(button);
+        });
+        
+        this.toolbar.appendChild(this.extraPanel);
+        this.container.style.position = 'relative';
+        this.container.appendChild(this.toolbar);
+    }
+    
+    toggleKeyboard() {
+        if (this.hiddenInput) {
+            this.hiddenInput.focus();
+            this.hiddenInput.click();
+        }
+    }
+    
+    toggleModifier(mod) {
+        this.modifierState[mod] = !this.modifierState[mod];
+        const btn = this.toolbarButtons[mod];
+        if (btn) {
+            btn.style.background = this.modifierState[mod] ? '#007bff' : '#333';
+            btn.style.borderColor = this.modifierState[mod] ? '#007bff' : '#555';
+        }
+    }
+    
+    toggleExtraButtons() {
+        if (this.extraPanel) {
+            const visible = this.extraPanel.style.display === 'flex';
+            this.extraPanel.style.display = visible ? 'none' : 'flex';
+        }
+    }
+    
+    sendSpecialKey(keyName) {
+        const keyCode = this.jsKeyToX11(keyName, keyName, 0);
+        if (!keyCode) return;
+        
+        // Send modifiers if active
+        if (this.modifierState.ctrl) this.sendKey(0xffe3, true);
+        if (this.modifierState.alt) this.sendKey(0xffe9, true);
+        if (this.modifierState.shift) this.sendKey(0xffe1, true);
+        
+        this.sendKey(keyCode, true);
+        this.sendKey(keyCode, false);
+        
+        // Release modifiers
+        if (this.modifierState.shift) this.sendKey(0xffe1, false);
+        if (this.modifierState.alt) this.sendKey(0xffe9, false);
+        if (this.modifierState.ctrl) this.sendKey(0xffe3, false);
+        
+        // Reset modifier toggles
+        this.resetModifiers();
+    }
+    
+    sendKey(keyCode, down) {
+        if (!this.connected) return;
+        
+        const msg = new Uint8Array(8);
+        msg[0] = 4;
+        msg[1] = down ? 1 : 0;
+        msg[4] = (keyCode >> 24) & 0xff;
+        msg[5] = (keyCode >> 16) & 0xff;
+        msg[6] = (keyCode >> 8) & 0xff;
+        msg[7] = keyCode & 0xff;
+        this.send(msg);
+    }
+    
+    sendCtrlAltDel() {
+        this.sendKey(0xffe3, true);  // Ctrl down
+        this.sendKey(0xffe9, true);  // Alt down
+        this.sendKey(0xffff, true);  // Delete down
+        this.sendKey(0xffff, false); // Delete up
+        this.sendKey(0xffe9, false); // Alt up
+        this.sendKey(0xffe3, false); // Ctrl up
+    }
+    
+    resetModifiers() {
+        Object.keys(this.modifierState).forEach(mod => {
+            this.modifierState[mod] = false;
+            const btn = this.toolbarButtons[mod];
+            if (btn) {
+                btn.style.background = '#333';
+                btn.style.borderColor = '#555';
+            }
+        });
+    }
+    
+    showToolbar(show = true) {
+        if (this.toolbar) {
+            this.toolbar.style.display = show ? 'flex' : 'none';
         }
     }
 }
