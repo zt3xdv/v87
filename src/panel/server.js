@@ -708,6 +708,33 @@ app.get('/api/server/:id/creation-progress', requireAuth, (req, res) => {
     res.json(progress);
 });
 
+// VNC Bridge connection code
+app.get('/api/server/:id/vnc-code', requireAuth, async (req, res) => {
+    const serverData = db.getServer(req.params.id);
+    if (!serverData) return res.status(404).json({ error: 'Server not found' });
+    if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const status = sandboxManager.getServerStatus(serverData.id);
+    if (status !== 'running') {
+        return res.status(400).json({ error: 'VM must be running to get VNC code' });
+    }
+    
+    // Generate connection code with token and server info
+    const protocol = req.secure ? 'https' : 'http';
+    const host = req.get('host');
+    const codeData = {
+        url: `${protocol}://${host}`,
+        token: req.headers.authorization?.replace('Bearer ', ''),
+        serverId: serverData.id
+    };
+    
+    const code = Buffer.from(JSON.stringify(codeData)).toString('base64');
+    
+    res.json({ code });
+});
+
 app.get('/api/server/:id', requireAuth, async (req, res) => {
     const serverData = db.getServer(req.params.id);
     if (!serverData) return res.status(404).json({ error: 'Server not found' });

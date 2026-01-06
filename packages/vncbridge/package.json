@@ -1,0 +1,19 @@
+{
+  "name": "vncbridge",
+  "version": "1.0.0",
+  "description": "Bridge VNC from v87 web panel to local VNC client",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "vncbridge": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["vnc", "bridge", "v87"],
+  "author": "zt3xdv",
+  "license": "MIT",
+  "dependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}

@@ -1155,6 +1155,7 @@ const App = {
         const statusBadge = document.getElementById('vnc-status');
         const connectBtn = document.getElementById('btn-vnc-connect');
         const fullscreenBtn = document.getElementById('btn-vnc-fullscreen');
+        const codeBtn = document.getElementById('btn-vnc-code');
         
         let connected = false;
         
@@ -1211,6 +1212,45 @@ const App = {
                 } else if (App.vncClient.canvas.webkitRequestFullscreen) {
                     App.vncClient.canvas.webkitRequestFullscreen();
                 }
+            }
+        };
+        
+        codeBtn.onclick = async () => {
+            try {
+                const res = await fetch(`/api/server/${id}/vnc-code`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+                });
+                const data = await res.json();
+                
+                if (data.error) {
+                    Dialog.warning(data.error, 'VNC Bridge');
+                    return;
+                }
+                
+                // Show code in a dialog with copy button
+                const codeHtml = `
+                    <div style="margin-bottom: 1rem;">
+                        <p class="text-sm text-muted mb-2">Use this code with <strong>vncbridge</strong> to connect from a native VNC client:</p>
+                        <div style="background: #1a1a1a; padding: 0.75rem; border-radius: 4px; word-break: break-all; font-family: monospace; font-size: 11px; max-height: 100px; overflow-y: auto;">
+                            ${data.code}
+                        </div>
+                    </div>
+                    <div class="text-sm text-muted">
+                        <p><strong>Usage:</strong></p>
+                        <code style="display: block; background: #1a1a1a; padding: 0.5rem; border-radius: 4px; margin-top: 0.5rem;">
+                            npx vncbridge -p 5900
+                        </code>
+                        <p class="mt-2">Then connect your VNC client to <strong>127.0.0.1:5900</strong></p>
+                    </div>
+                `;
+                
+                Dialog.alert('VNC Bridge Code', codeHtml, { confirmText: 'Copy Code' }).then(() => {
+                    navigator.clipboard.writeText(data.code).then(() => {
+                        Dialog.success('Code copied to clipboard!', 'Copied');
+                    }).catch(() => {});
+                });
+            } catch (err) {
+                Dialog.warning('Failed to get VNC code', 'Error');
             }
         };
     },
