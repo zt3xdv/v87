@@ -348,7 +348,7 @@ export default {
         const servers = load(SERVERS_FILE).filter(s => s.nodeId === nodeId);
         return {
             ram: servers.reduce((acc, s) => acc + (s.ram || 0), 0),
-            disk: servers.reduce((acc, s) => acc + (parseFloat(s.disk) || 0), 0),
+            disk: servers.reduce((acc, s) => acc + (parseInt((s.diskSize || '0G').replace('G', '')) || 0), 0),
             cpu: servers.reduce((acc, s) => acc + (s.cpuCores || 1), 0),
             count: servers.length
         };

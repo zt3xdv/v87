@@ -168,15 +168,30 @@ io.on('connection', (socket) => {
         
         socket.join(`server:${serverId}`);
         
-        const status = sandboxManager.getServerStatus(serverId);
+        // Get status from node or local sandboxManager
+        let status = 'stopped';
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    const vmStatus = await client.getVMStatus(serverId);
+                    status = vmStatus.status || 'stopped';
+                } catch {}
+            }
+        } else {
+            status = sandboxManager.getServerStatus(serverId);
+        }
         socket.emit('vm-status', status === 'running' ? 'started' : 'stopped');
         
-        try {
-            const logs = await sandboxManager.getServerLogs(serverId, 100);
-            if (logs) {
-                socket.emit('term-data', logs);
-            }
-        } catch (err) {}
+        // Only get logs from local servers (nodes stream their own logs)
+        if (!serverData.nodeId) {
+            try {
+                const logs = await sandboxManager.getServerLogs(serverId, 100);
+                if (logs) {
+                    socket.emit('term-data', logs);
+                }
+            } catch (err) {}
+        }
     });
     
     socket.on('input', async (data) => {
@@ -193,7 +208,15 @@ io.on('connection', (socket) => {
             return;
         }
         
-        sandboxManager.sendInput(serverId, inputData);
+        // Route input to node or local sandboxManager
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                client.sendVMInput(serverId, inputData);
+            }
+        } else {
+            sandboxManager.sendInput(serverId, inputData);
+        }
     });
     
     socket.on('leave-server', (serverId) => {
@@ -220,7 +243,7 @@ io.of('/vnc').use((socket, next) => {
     next();
 });
 
-io.of('/vnc').on('connection', (socket) => {
+io.of('/vnc').on('connection', async (socket) => {
     const serverId = socket.handshake.query?.serverId;
     
     log(`VNC connection attempt for server: ${serverId}`);
@@ -245,6 +268,50 @@ io.of('/vnc').on('connection', (socket) => {
         return;
     }
     
+    // Handle VNC for remote nodes
+    if (serverData.nodeId) {
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (!client || !client.isConnected()) {
+            socket.emit('error', 'Node is offline');
+            socket.disconnect();
+            return;
+        }
+        
+        try {
+            await client.connectVNC(serverId);
+            
+            const onVncData = (data) => {
+                socket.emit('vnc-data', Buffer.from(data.data, 'base64'));
+            };
+            
+            const onVncDisconnected = () => {
+                socket.emit('vnc-disconnected');
+                socket.disconnect();
+            };
+            
+            client.on('vnc-data', onVncData);
+            client.on('vnc-disconnected', onVncDisconnected);
+            
+            socket.emit('vnc-connected');
+            
+            socket.on('vnc-data', (data) => {
+                client.sendVNCData(Buffer.from(data).toString('base64'));
+            });
+            
+            socket.on('disconnect', () => {
+                log(`VNC client disconnected for server: ${serverId} (remote)`);
+                client.off('vnc-data', onVncData);
+                client.off('vnc-disconnected', onVncDisconnected);
+            });
+        } catch (err) {
+            log(`VNC error for ${serverId} (remote): ${err.message}`);
+            socket.emit('error', 'VNC connection error: ' + err.message);
+            socket.disconnect();
+        }
+        return;
+    }
+    
+    // Handle VNC for local servers
     const vncSocketPath = sandboxManager.getVncSocketPath(serverId);
     if (!vncSocketPath) {
         socket.emit('error', 'VNC not available - VM may not be running');
@@ -859,23 +926,46 @@ app.get('/api/server/:id', requireAuth, async (req, res) => {
     
     const image = getImage(serverData.imageId);
     
-    // Read credentials from metadata
+    // Read credentials from metadata or server data (for remote nodes)
     let credentials = null;
-    try {
-        const metadataPath = path.join(DATA_DIR, 'users', serverData.ownerId, serverData.id, 'metadata.json');
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
-        if (metadata.password) {
-            credentials = {
-                user: metadata.defaultUser || 'root',
-                password: metadata.password
-            };
+    if (serverData.password) {
+        credentials = {
+            user: 'root',
+            password: serverData.password
+        };
+    } else {
+        try {
+            const metadataPath = path.join(DATA_DIR, 'users', serverData.ownerId, serverData.id, 'metadata.json');
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+            if (metadata.password) {
+                credentials = {
+                    user: metadata.defaultUser || 'root',
+                    password: metadata.password
+                };
+            }
+        } catch {}
+    }
+
+    // Get status from node or local sandboxManager
+    let status = serverData.status || 'stopped';
+    if (serverData.nodeId) {
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (client && client.isConnected()) {
+            try {
+                const vmStatus = await client.getVMStatus(req.params.id);
+                status = vmStatus.status || 'stopped';
+            } catch {}
+        } else {
+            status = 'offline';
         }
-    } catch {}
+    } else {
+        status = sandboxManager.getServerStatus(serverData.id);
+    }
 
     res.json({ 
         server: {
             ...serverData,
-            status: sandboxManager.getServerStatus(serverData.id)
+            status
         },
         image: image ? { id: image.id, name: image.name, description: image.description } : null,
         credentials
@@ -1059,6 +1149,21 @@ app.get('/api/server/:id/stats', requireAuth, async (req, res, next) => {
         if (!serverData) return res.status(404).json({ error: 'Server not found' });
         if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
             return res.status(403).json({ error: 'Access denied' });
+        }
+        
+        // Handle stats for remote nodes
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (!client || !client.isConnected()) {
+                return res.json({ running: false, nodeOffline: true });
+            }
+            try {
+                const stats = await client.getVMStats(req.params.id);
+                res.json({ running: true, ...stats.stats });
+            } catch {
+                res.json({ running: false });
+            }
+            return;
         }
         
         if (sandboxManager.getServerStatus(serverData.id) !== 'running') {

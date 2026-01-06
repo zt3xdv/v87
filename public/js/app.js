@@ -279,7 +279,7 @@ const App = {
         }
 
         const serverMatch = path.match(/^\/server\/([^\/]+)\/(console|creating)$/);
-        const adminMatch = path.match(/^\/admin(?:\/(servers|users|audit|maintenance|config))?$/);
+        const adminMatch = path.match(/^\/admin(?:\/(servers|users|nodes|audit|maintenance|config))?$/);
         const accountMatch = path.match(/^\/account(?:\/(apikeys|webhooks|prefs|activity))?$/);
 
         if (path === '/dashboard') App.renderNav('dashboard');
