@@ -964,6 +964,12 @@ class VNCClient {
         }
     }
     
+    showToolbar(show = true) {
+        if (this.toolbar) {
+            this.toolbar.style.display = show ? 'flex' : 'none';
+        }
+    }
+    
     createMobileToolbar() {
         // Hidden input for keyboard
         this.hiddenInput = document.createElement('input');
@@ -1002,28 +1008,28 @@ class VNCClient {
         this.toolbar.className = 'vnc-mobile-toolbar';
         this.toolbar.style.cssText = `
             width: 100%;
-            background: rgba(0,0,0,0.95);
-            padding: 8px;
+            background: #1a1a1a;
+            padding: 6px;
             display: flex;
-            gap: 6px;
+            gap: 4px;
             flex-wrap: wrap;
             justify-content: center;
             flex-shrink: 0;
+            border-top: 1px solid #333;
         `;
         
         const buttons = [
-            { icon: '✕', label: 'Hide', action: () => this.hideToolbar(), style: 'background:#c00;border-color:#c00;' },
             { icon: '⌨️', label: 'Keyboard', action: () => this.toggleKeyboard() },
-            { icon: 'Esc', label: 'Escape', action: () => this.sendSpecialKey('Escape') },
+            { icon: 'Esc', label: 'Esc', action: () => this.sendSpecialKey('Escape') },
             { icon: 'Tab', label: 'Tab', action: () => this.sendSpecialKey('Tab') },
             { icon: 'Ctrl', label: 'Ctrl', toggle: 'ctrl' },
             { icon: 'Alt', label: 'Alt', toggle: 'alt' },
-            { icon: 'Shift', label: 'Shift', toggle: 'shift' },
+            { icon: '⇧', label: 'Shift', toggle: 'shift' },
+            { icon: '←', label: 'Left', action: () => this.sendSpecialKey('ArrowLeft') },
             { icon: '↑', label: 'Up', action: () => this.sendSpecialKey('ArrowUp') },
             { icon: '↓', label: 'Down', action: () => this.sendSpecialKey('ArrowDown') },
-            { icon: '←', label: 'Left', action: () => this.sendSpecialKey('ArrowLeft') },
             { icon: '→', label: 'Right', action: () => this.sendSpecialKey('ArrowRight') },
-            { icon: '⋯', label: 'More', action: () => this.toggleExtraButtons() },
+            { icon: 'Fn', label: 'More', action: () => this.toggleExtraButtons() },
         ];
         
         this.toolbarButtons = {};
@@ -1033,19 +1039,18 @@ class VNCClient {
             button.textContent = btn.icon;
             button.title = btn.label;
             button.style.cssText = `
-                background: #333;
+                background: #2a2a2a;
                 color: #fff;
-                border: 1px solid #555;
-                border-radius: 6px;
-                padding: 10px 14px;
-                font-size: 14px;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 12px;
                 font-family: inherit;
                 cursor: pointer;
-                min-width: 44px;
+                min-width: 36px;
                 touch-action: manipulation;
                 user-select: none;
                 -webkit-user-select: none;
-                ${btn.style || ''}
             `;
             
             if (btn.toggle) {
@@ -1117,49 +1122,6 @@ class VNCClient {
         // Reorganize container for vertical layout
         this.container.style.flexDirection = 'column';
         this.container.appendChild(this.toolbar);
-        
-        // Toggle button (show toolbar when hidden)
-        this.toggleBtn = document.createElement('button');
-        this.toggleBtn.innerHTML = '☰ Show Controls';
-        this.toggleBtn.title = 'Toggle toolbar';
-        this.toggleBtn.style.cssText = `
-            width: 100%;
-            padding: 12px;
-            background: #222;
-            color: #fff;
-            border: none;
-            border-top: 1px solid #333;
-            font-size: 14px;
-            cursor: pointer;
-            display: none;
-            touch-action: manipulation;
-            user-select: none;
-            -webkit-user-select: none;
-            flex-shrink: 0;
-        `;
-        this.toggleBtn.addEventListener('click', () => this.toggleToolbar());
-        this.container.appendChild(this.toggleBtn);
-        
-        // Start with toolbar visible
-        this.toolbarVisible = true;
-    }
-    
-    toggleToolbar() {
-        this.toolbarVisible = !this.toolbarVisible;
-        if (this.toolbar) {
-            this.toolbar.style.display = this.toolbarVisible ? 'flex' : 'none';
-        }
-        if (this.toggleBtn) {
-            this.toggleBtn.style.display = this.toolbarVisible ? 'none' : 'block';
-        }
-    }
-    
-    hideToolbar() {
-        this.toolbarVisible = false;
-        if (this.toolbar) this.toolbar.style.display = 'none';
-        if (this.toggleBtn) {
-            this.toggleBtn.style.display = 'block';
-        }
     }
     
     toggleKeyboard() {
@@ -1173,8 +1135,8 @@ class VNCClient {
         this.modifierState[mod] = !this.modifierState[mod];
         const btn = this.toolbarButtons[mod];
         if (btn) {
-            btn.style.background = this.modifierState[mod] ? '#007bff' : '#333';
-            btn.style.borderColor = this.modifierState[mod] ? '#007bff' : '#555';
+            btn.style.background = this.modifierState[mod] ? '#0066cc' : '#2a2a2a';
+            btn.style.borderColor = this.modifierState[mod] ? '#0066cc' : '#444';
         }
     }
     
@@ -1233,15 +1195,9 @@ class VNCClient {
             this.modifierState[mod] = false;
             const btn = this.toolbarButtons[mod];
             if (btn) {
-                btn.style.background = '#333';
-                btn.style.borderColor = '#555';
+                btn.style.background = '#2a2a2a';
+                btn.style.borderColor = '#444';
             }
         });
-    }
-    
-    showToolbar(show = true) {
-        if (this.toolbar) {
-            this.toolbar.style.display = show ? 'flex' : 'none';
-        }
     }
 }
