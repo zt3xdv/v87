@@ -1017,6 +1017,7 @@ class VNCClient {
         `;
         
         const buttons = [
+            { icon: '✕', label: 'Hide', action: () => this.hideToolbar(), style: 'background:#c00;border-color:#c00;' },
             { icon: '⌨️', label: 'Keyboard', action: () => this.toggleKeyboard() },
             { icon: 'Esc', label: 'Escape', action: () => this.sendSpecialKey('Escape') },
             { icon: 'Tab', label: 'Tab', action: () => this.sendSpecialKey('Tab') },
@@ -1027,7 +1028,6 @@ class VNCClient {
             { icon: '↓', label: 'Down', action: () => this.sendSpecialKey('ArrowDown') },
             { icon: '←', label: 'Left', action: () => this.sendSpecialKey('ArrowLeft') },
             { icon: '→', label: 'Right', action: () => this.sendSpecialKey('ArrowRight') },
-            { icon: 'F1', label: 'F1', action: () => this.sendSpecialKey('F1') },
             { icon: '⋯', label: 'More', action: () => this.toggleExtraButtons() },
         ];
         
@@ -1050,6 +1050,7 @@ class VNCClient {
                 touch-action: manipulation;
                 user-select: none;
                 -webkit-user-select: none;
+                ${btn.style || ''}
             `;
             
             if (btn.toggle) {
@@ -1074,6 +1075,7 @@ class VNCClient {
         `;
         
         const extraButtons = [
+            { icon: 'F1', action: () => this.sendSpecialKey('F1') },
             { icon: 'F2', action: () => this.sendSpecialKey('F2') },
             { icon: 'F3', action: () => this.sendSpecialKey('F3') },
             { icon: 'F4', action: () => this.sendSpecialKey('F4') },
@@ -1118,6 +1120,56 @@ class VNCClient {
         this.toolbar.appendChild(this.extraPanel);
         this.container.style.position = 'relative';
         this.container.appendChild(this.toolbar);
+        
+        // Toggle button (always visible)
+        this.toggleBtn = document.createElement('button');
+        this.toggleBtn.innerHTML = '☰';
+        this.toggleBtn.title = 'Toggle toolbar';
+        this.toggleBtn.style.cssText = `
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            width: 44px;
+            height: 44px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 50%;
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 1001;
+            display: none;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+        `;
+        this.toggleBtn.addEventListener('click', () => this.toggleToolbar());
+        this.container.appendChild(this.toggleBtn);
+        
+        // Start with toolbar visible
+        this.toolbarVisible = true;
+    }
+    
+    toggleToolbar() {
+        this.toolbarVisible = !this.toolbarVisible;
+        if (this.toolbar) {
+            this.toolbar.style.display = this.toolbarVisible ? 'flex' : 'none';
+        }
+        if (this.toggleBtn) {
+            this.toggleBtn.style.display = this.toolbarVisible ? 'none' : 'flex';
+            this.toggleBtn.style.alignItems = 'center';
+            this.toggleBtn.style.justifyContent = 'center';
+        }
+    }
+    
+    hideToolbar() {
+        this.toolbarVisible = false;
+        if (this.toolbar) this.toolbar.style.display = 'none';
+        if (this.toggleBtn) {
+            this.toggleBtn.style.display = 'flex';
+            this.toggleBtn.style.alignItems = 'center';
+            this.toggleBtn.style.justifyContent = 'center';
+        }
     }
     
     toggleKeyboard() {
