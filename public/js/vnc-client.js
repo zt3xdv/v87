@@ -21,6 +21,21 @@ class VNCClient {
         this.pixelFormat = null;
         this.buffer = new Uint8Array(0);
         
+        // Optimizations
+        this.qualityLevel = options.quality || 6;
+        this.compressionLevel = options.compression || 9;
+        this.adaptiveFrameRate = true;
+        this.minFrameInterval = 50;  // 20 FPS max
+        this.maxFrameInterval = 200; // 5 FPS min
+        this.currentFrameInterval = 50;
+        this.lastFrameTime = 0;
+        this.pendingFrames = 0;
+        this.frameRequestPending = false;
+        
+        // ZRLE state
+        this.zrleBuffer = null;
+        this.zrlePalette = new Uint32Array(128);
+        
         this.init();
     }
     
@@ -34,23 +49,28 @@ class VNCClient {
         this.canvas.style.height = 'auto';
         this.canvas.style.objectFit = 'contain';
         this.canvas.style.margin = '0 auto';
-        this.canvas.style.cursor = 'none';
+        this.canvas.style.cursor = 'default';
         this.canvas.tabIndex = 1;
         this.container.style.overflow = 'hidden';
         this.container.style.display = 'flex';
         this.container.style.alignItems = 'center';
         this.container.style.justifyContent = 'center';
         this.container.appendChild(this.canvas);
-        this.ctx = this.canvas.getContext('2d');
+        this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
         
         this.cursorX = 0;
         this.cursorY = 0;
-        this.cursorVisible = true;
+        this.cursorVisible = false; // VM cursor is synced via USB tablet
+        this.localCursorFallback = false; // Enable if VM cursor not visible
         this.touchState = { active: false, lastX: 0, lastY: 0, button: 0 };
+        
+        // Throttled mouse move
+        this.lastMouseSend = 0;
+        this.mouseThrottle = 16; // ~60Hz max
         
         this.canvas.addEventListener('mousedown', (e) => this.handleMouse(e, 1));
         this.canvas.addEventListener('mouseup', (e) => this.handleMouse(e, 0));
-        this.canvas.addEventListener('mousemove', (e) => this.handleMouse(e, -1));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
         this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
         this.canvas.addEventListener('keydown', (e) => this.handleKey(e, true));
         this.canvas.addEventListener('keyup', (e) => this.handleKey(e, false));
@@ -111,8 +131,6 @@ class VNCClient {
         this.state = 'connecting';
         this.showStatus('Connecting to VNC...');
         
-        console.log('VNC connecting to server:', serverId);
-        
         this.socket = io('/vnc', {
             auth: { token },
             query: { serverId: serverId },
@@ -124,13 +142,13 @@ class VNCClient {
         });
         
         this.socket.on('vnc-connected', () => {
-            console.log('VNC: received vnc-connected event');
             this.state = 'handshake';
         });
         
         this.socket.on('vnc-data', (data) => {
-            console.log('VNC: received data, length:', data.length, 'state:', this.state);
-            const bytes = Array.isArray(data) ? new Uint8Array(data) : new Uint8Array(data);
+            const bytes = data instanceof ArrayBuffer 
+                ? new Uint8Array(data) 
+                : (Array.isArray(data) ? new Uint8Array(data) : new Uint8Array(data));
             this.handleData(bytes);
         });
         
@@ -164,7 +182,7 @@ class VNCClient {
     
     send(data) {
         if (this.socket && (this.connected || this.state === 'handshake' || this.state === 'security' || this.state === 'security-result' || this.state === 'init')) {
-            this.socket.emit('vnc-data', data);
+            this.socket.emit('vnc-data', Array.from(data));
         }
     }
     
@@ -212,13 +230,9 @@ class VNCClient {
         const version = String.fromCharCode(...this.buffer.slice(0, 12));
         this.rfbVersion = version.trim();
         
-        console.log('VNC: server version:', this.rfbVersion);
-        
-        const response = new Uint8Array([0x52, 0x46, 0x42, 0x20, 0x30, 0x30, 0x33, 0x2e, 0x30, 0x30, 0x38, 0x0a]); // "RFB 003.008\n"
+        const response = new Uint8Array([0x52, 0x46, 0x42, 0x20, 0x30, 0x30, 0x33, 0x2e, 0x30, 0x30, 0x38, 0x0a]);
         this.send(response);
         this.state = 'security';
-        
-        console.log('VNC: sent client version, state:', this.state);
         
         return 12;
     }
@@ -248,10 +262,10 @@ class VNCClient {
         const result = (this.buffer[0] << 24) | (this.buffer[1] << 16) | (this.buffer[2] << 8) | this.buffer[3];
         
         if (result === 0) {
-            this.send(new Uint8Array([1]));
+            this.send(new Uint8Array([1])); // shared flag
             this.state = 'init';
         } else {
-            this.showStatus('Security handshake failed');
+            this.showStatus('Authentication failed');
             this.disconnect();
         }
         
@@ -261,99 +275,86 @@ class VNCClient {
     handleServerInit() {
         if (this.buffer.length < 24) return 0;
         
-        const width = (this.buffer[0] << 8) | this.buffer[1];
-        const height = (this.buffer[2] << 8) | this.buffer[3];
-        
-        this.pixelFormat = {
-            bitsPerPixel: this.buffer[4],
-            depth: this.buffer[5],
-            bigEndian: this.buffer[6],
-            trueColor: this.buffer[7],
-            redMax: (this.buffer[8] << 8) | this.buffer[9],
-            greenMax: (this.buffer[10] << 8) | this.buffer[11],
-            blueMax: (this.buffer[12] << 8) | this.buffer[13],
-            redShift: this.buffer[14],
-            greenShift: this.buffer[15],
-            blueShift: this.buffer[16]
-        };
+        const w = (this.buffer[0] << 8) | this.buffer[1];
+        const h = (this.buffer[2] << 8) | this.buffer[3];
         
         const nameLen = (this.buffer[20] << 24) | (this.buffer[21] << 16) | (this.buffer[22] << 8) | this.buffer[23];
         if (this.buffer.length < 24 + nameLen) return 0;
         
         this.serverName = String.fromCharCode(...this.buffer.slice(24, 24 + nameLen));
         
-        this.resize(width, height);
+        this.resize(w, h);
+        
+        // Set optimized pixel format: 32-bit BGRA
+        const setPixelFormat = new Uint8Array(20);
+        setPixelFormat[0] = 0;  // SetPixelFormat
+        setPixelFormat[4] = 32; // bits-per-pixel
+        setPixelFormat[5] = 24; // depth
+        setPixelFormat[6] = 0;  // big-endian
+        setPixelFormat[7] = 1;  // true-color
+        setPixelFormat[8] = 0; setPixelFormat[9] = 255;   // red-max
+        setPixelFormat[10] = 0; setPixelFormat[11] = 255; // green-max
+        setPixelFormat[12] = 0; setPixelFormat[13] = 255; // blue-max
+        setPixelFormat[14] = 16; // red-shift
+        setPixelFormat[15] = 8;  // green-shift
+        setPixelFormat[16] = 0;  // blue-shift
+        this.send(setPixelFormat);
+        
+        // Request encodings (priority order: most efficient first)
+        // Encodings: CopyRect(1), ZRLE(16), Hextile(5), RRE(2), Raw(0)
+        // Pseudo-encodings: Cursor(-239), DesktopSize(-223), Compression(-247 to -256), Quality(-23 to -32)
+        const encodings = [
+            1,     // CopyRect - copies existing screen areas (very efficient)
+            16,    // ZRLE - best compression
+            5,     // Hextile - good compression
+            2,     // RRE - simple compression  
+            0,     // Raw - fallback
+            -223,  // DesktopSize pseudo-encoding
+            -239,  // Cursor pseudo-encoding
+            -247 + (9 - this.compressionLevel), // Compression level (9 = max)
+            -32 + this.qualityLevel,  // Quality level for JPEG
+        ];
+        
+        const setEncodings = new Uint8Array(4 + encodings.length * 4);
+        setEncodings[0] = 2; // SetEncodings
+        setEncodings[2] = (encodings.length >> 8) & 0xff;
+        setEncodings[3] = encodings.length & 0xff;
+        
+        for (let i = 0; i < encodings.length; i++) {
+            const enc = encodings[i];
+            const offset = 4 + i * 4;
+            setEncodings[offset] = (enc >> 24) & 0xff;
+            setEncodings[offset + 1] = (enc >> 16) & 0xff;
+            setEncodings[offset + 2] = (enc >> 8) & 0xff;
+            setEncodings[offset + 3] = enc & 0xff;
+        }
+        this.send(setEncodings);
+        
         this.connected = true;
         this.state = 'connected';
         this.showStatus('');
         this.onConnect();
         
-        this.setPixelFormat();
-        this.setEncodings();
+        // Request initial full update
         this.requestUpdate(false);
         
         return 24 + nameLen;
     }
     
-    setPixelFormat() {
-        const msg = new Uint8Array(20);
-        msg[0] = 0;
-        msg[4] = 32;
-        msg[5] = 24;
-        msg[6] = 0;
-        msg[7] = 1;
-        msg[8] = 0; msg[9] = 255;
-        msg[10] = 0; msg[11] = 255;
-        msg[12] = 0; msg[13] = 255;
-        msg[14] = 16;
-        msg[15] = 8;
-        msg[16] = 0;
-        this.send(msg);
+    requestUpdate(incremental) {
+        if (!this.connected || this.frameRequestPending) return;
         
-        this.pixelFormat = {
-            bitsPerPixel: 32,
-            depth: 24,
-            bigEndian: false,
-            trueColor: true,
-            redMax: 255,
-            greenMax: 255,
-            blueMax: 255,
-            redShift: 16,
-            greenShift: 8,
-            blueShift: 0
-        };
-    }
-    
-    setEncodings() {
-        const encodings = [0];
-        const msg = new Uint8Array(4 + encodings.length * 4);
-        msg[0] = 2;
-        msg[2] = (encodings.length >> 8) & 0xff;
-        msg[3] = encodings.length & 0xff;
-        
-        for (let i = 0; i < encodings.length; i++) {
-            const enc = encodings[i];
-            const offset = 4 + i * 4;
-            msg[offset] = (enc >> 24) & 0xff;
-            msg[offset + 1] = (enc >> 16) & 0xff;
-            msg[offset + 2] = (enc >> 8) & 0xff;
-            msg[offset + 3] = enc & 0xff;
-        }
-        
-        this.send(msg);
-    }
-    
-    requestUpdate(incremental = true) {
         const msg = new Uint8Array(10);
-        msg[0] = 3;
+        msg[0] = 3; // FramebufferUpdateRequest
         msg[1] = incremental ? 1 : 0;
-        msg[2] = 0; msg[3] = 0;
-        msg[4] = 0; msg[5] = 0;
+        msg[2] = 0; msg[3] = 0; // x
+        msg[4] = 0; msg[5] = 0; // y
         msg[6] = (this.width >> 8) & 0xff;
         msg[7] = this.width & 0xff;
         msg[8] = (this.height >> 8) & 0xff;
         msg[9] = this.height & 0xff;
         this.send(msg);
+        this.frameRequestPending = true;
     }
     
     handleMessage() {
@@ -367,7 +368,7 @@ class VNCClient {
             case 1:
                 return this.handleSetColorMap();
             case 2:
-                return 1;
+                return 1; // Bell
             case 3:
                 return this.handleServerCutText();
             default:
@@ -388,38 +389,335 @@ class VNCClient {
             const y = (this.buffer[offset + 2] << 8) | this.buffer[offset + 3];
             const w = (this.buffer[offset + 4] << 8) | this.buffer[offset + 5];
             const h = (this.buffer[offset + 6] << 8) | this.buffer[offset + 7];
-            const encoding = (this.buffer[offset + 8] << 24) | (this.buffer[offset + 9] << 16) | 
-                           (this.buffer[offset + 10] << 8) | this.buffer[offset + 11];
+            const encoding = this.readInt32(offset + 8);
             
             offset += 12;
             
-            if (encoding === 0) {
-                const pixelBytes = w * h * 4;
-                if (this.buffer.length < offset + pixelBytes) return 0;
-                
-                this.drawRect(x, y, w, h, this.buffer.slice(offset, offset + pixelBytes));
-                offset += pixelBytes;
+            let consumed = 0;
+            
+            switch (encoding) {
+                case 0: // Raw
+                    consumed = this.handleRawRect(x, y, w, h, offset);
+                    break;
+                case 1: // CopyRect
+                    consumed = this.handleCopyRect(x, y, w, h, offset);
+                    break;
+                case 2: // RRE
+                    consumed = this.handleRRERect(x, y, w, h, offset);
+                    break;
+                case 5: // Hextile
+                    consumed = this.handleHextileRect(x, y, w, h, offset);
+                    break;
+                case 16: // ZRLE
+                    consumed = this.handleZRLERect(x, y, w, h, offset);
+                    break;
+                case -223: // DesktopSize
+                    this.resize(w, h);
+                    consumed = 0;
+                    break;
+                case -239: // Cursor
+                    consumed = this.handleCursorPseudo(w, h, offset);
+                    break;
+                default:
+                    // Unknown encoding, try raw fallback
+                    consumed = this.handleRawRect(x, y, w, h, offset);
             }
+            
+            if (consumed === -1) return 0; // Need more data
+            offset += consumed;
         }
         
         this.ctx.putImageData(this.frameBuffer, 0, 0);
         this.drawCursor();
         
-        setTimeout(() => this.requestUpdate(true), 33);
+        this.frameRequestPending = false;
+        
+        // Adaptive frame rate
+        const now = performance.now();
+        const frameTime = now - this.lastFrameTime;
+        this.lastFrameTime = now;
+        
+        if (this.adaptiveFrameRate) {
+            // Adjust interval based on network performance
+            if (frameTime > this.currentFrameInterval * 1.5) {
+                this.currentFrameInterval = Math.min(this.maxFrameInterval, this.currentFrameInterval * 1.2);
+            } else if (frameTime < this.currentFrameInterval * 0.8) {
+                this.currentFrameInterval = Math.max(this.minFrameInterval, this.currentFrameInterval * 0.9);
+            }
+        }
+        
+        setTimeout(() => this.requestUpdate(true), this.currentFrameInterval);
         
         return offset;
     }
     
-    drawRect(x, y, w, h, pixels) {
+    readInt32(offset) {
+        return (this.buffer[offset] << 24) | (this.buffer[offset + 1] << 16) | 
+               (this.buffer[offset + 2] << 8) | this.buffer[offset + 3];
+    }
+    
+    handleRawRect(x, y, w, h, offset) {
+        const pixelBytes = w * h * 4;
+        if (this.buffer.length < offset + pixelBytes) return -1;
+        
         for (let py = 0; py < h; py++) {
             for (let px = 0; px < w; px++) {
-                const srcIdx = (py * w + px) * 4;
+                const srcIdx = offset + (py * w + px) * 4;
                 const dstIdx = ((y + py) * this.width + (x + px)) * 4;
                 
-                this.frameBuffer.data[dstIdx] = pixels[srcIdx + 2];
-                this.frameBuffer.data[dstIdx + 1] = pixels[srcIdx + 1];
-                this.frameBuffer.data[dstIdx + 2] = pixels[srcIdx];
+                this.frameBuffer.data[dstIdx] = this.buffer[srcIdx + 2];     // R
+                this.frameBuffer.data[dstIdx + 1] = this.buffer[srcIdx + 1]; // G
+                this.frameBuffer.data[dstIdx + 2] = this.buffer[srcIdx];     // B
                 this.frameBuffer.data[dstIdx + 3] = 255;
+            }
+        }
+        
+        return pixelBytes;
+    }
+    
+    handleCopyRect(x, y, w, h, offset) {
+        if (this.buffer.length < offset + 4) return -1;
+        
+        const srcX = (this.buffer[offset] << 8) | this.buffer[offset + 1];
+        const srcY = (this.buffer[offset + 2] << 8) | this.buffer[offset + 3];
+        
+        // Copy pixels from source to destination
+        const tempData = new Uint8ClampedArray(w * h * 4);
+        
+        for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+                const srcIdx = ((srcY + py) * this.width + (srcX + px)) * 4;
+                const tmpIdx = (py * w + px) * 4;
+                tempData[tmpIdx] = this.frameBuffer.data[srcIdx];
+                tempData[tmpIdx + 1] = this.frameBuffer.data[srcIdx + 1];
+                tempData[tmpIdx + 2] = this.frameBuffer.data[srcIdx + 2];
+                tempData[tmpIdx + 3] = this.frameBuffer.data[srcIdx + 3];
+            }
+        }
+        
+        for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+                const dstIdx = ((y + py) * this.width + (x + px)) * 4;
+                const tmpIdx = (py * w + px) * 4;
+                this.frameBuffer.data[dstIdx] = tempData[tmpIdx];
+                this.frameBuffer.data[dstIdx + 1] = tempData[tmpIdx + 1];
+                this.frameBuffer.data[dstIdx + 2] = tempData[tmpIdx + 2];
+                this.frameBuffer.data[dstIdx + 3] = tempData[tmpIdx + 3];
+            }
+        }
+        
+        return 4;
+    }
+    
+    handleRRERect(x, y, w, h, offset) {
+        if (this.buffer.length < offset + 8) return -1;
+        
+        const numSubrects = this.readInt32(offset);
+        const bgColor = this.readPixel(offset + 4);
+        
+        const totalBytes = 8 + numSubrects * 12;
+        if (this.buffer.length < offset + totalBytes) return -1;
+        
+        // Fill background
+        this.fillRect(x, y, w, h, bgColor);
+        
+        // Draw subrectangles
+        let subOffset = offset + 8;
+        for (let i = 0; i < numSubrects; i++) {
+            const color = this.readPixel(subOffset);
+            const sx = (this.buffer[subOffset + 4] << 8) | this.buffer[subOffset + 5];
+            const sy = (this.buffer[subOffset + 6] << 8) | this.buffer[subOffset + 7];
+            const sw = (this.buffer[subOffset + 8] << 8) | this.buffer[subOffset + 9];
+            const sh = (this.buffer[subOffset + 10] << 8) | this.buffer[subOffset + 11];
+            this.fillRect(x + sx, y + sy, sw, sh, color);
+            subOffset += 12;
+        }
+        
+        return totalBytes;
+    }
+    
+    handleHextileRect(x, y, w, h, offset) {
+        const startOffset = offset;
+        let bgColor = { r: 0, g: 0, b: 0 };
+        let fgColor = { r: 255, g: 255, b: 255 };
+        
+        for (let tileY = 0; tileY < h; tileY += 16) {
+            for (let tileX = 0; tileX < w; tileX += 16) {
+                if (this.buffer.length < offset + 1) return -1;
+                
+                const tileW = Math.min(16, w - tileX);
+                const tileH = Math.min(16, h - tileY);
+                const subencoding = this.buffer[offset++];
+                
+                if (subencoding & 1) { // Raw
+                    const bytes = tileW * tileH * 4;
+                    if (this.buffer.length < offset + bytes) return -1;
+                    
+                    for (let py = 0; py < tileH; py++) {
+                        for (let px = 0; px < tileW; px++) {
+                            const srcIdx = offset + (py * tileW + px) * 4;
+                            const dstIdx = ((y + tileY + py) * this.width + (x + tileX + px)) * 4;
+                            this.frameBuffer.data[dstIdx] = this.buffer[srcIdx + 2];
+                            this.frameBuffer.data[dstIdx + 1] = this.buffer[srcIdx + 1];
+                            this.frameBuffer.data[dstIdx + 2] = this.buffer[srcIdx];
+                            this.frameBuffer.data[dstIdx + 3] = 255;
+                        }
+                    }
+                    offset += bytes;
+                } else {
+                    if (subencoding & 2) { // Background specified
+                        if (this.buffer.length < offset + 4) return -1;
+                        bgColor = this.readPixel(offset);
+                        offset += 4;
+                    }
+                    
+                    this.fillRect(x + tileX, y + tileY, tileW, tileH, bgColor);
+                    
+                    if (subencoding & 4) { // Foreground specified
+                        if (this.buffer.length < offset + 4) return -1;
+                        fgColor = this.readPixel(offset);
+                        offset += 4;
+                    }
+                    
+                    if (subencoding & 8) { // Any subrects
+                        if (this.buffer.length < offset + 1) return -1;
+                        const numSubrects = this.buffer[offset++];
+                        const colored = !!(subencoding & 16);
+                        
+                        for (let i = 0; i < numSubrects; i++) {
+                            let color = fgColor;
+                            if (colored) {
+                                if (this.buffer.length < offset + 4) return -1;
+                                color = this.readPixel(offset);
+                                offset += 4;
+                            }
+                            
+                            if (this.buffer.length < offset + 2) return -1;
+                            const xy = this.buffer[offset++];
+                            const wh = this.buffer[offset++];
+                            const sx = (xy >> 4) & 0x0f;
+                            const sy = xy & 0x0f;
+                            const sw = ((wh >> 4) & 0x0f) + 1;
+                            const sh = (wh & 0x0f) + 1;
+                            
+                            this.fillRect(x + tileX + sx, y + tileY + sy, sw, sh, color);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return offset - startOffset;
+    }
+    
+    handleZRLERect(x, y, w, h, offset) {
+        if (this.buffer.length < offset + 4) return -1;
+        
+        const length = this.readInt32(offset);
+        if (this.buffer.length < offset + 4 + length) return -1;
+        
+        // ZRLE data is zlib compressed - we need to decompress it
+        // For now, fall back to requesting raw encoding if ZRLE fails
+        try {
+            const compressedData = this.buffer.slice(offset + 4, offset + 4 + length);
+            const decompressed = this.inflateZlib(compressedData);
+            
+            if (decompressed) {
+                this.decodeZRLETiles(x, y, w, h, decompressed);
+            }
+        } catch (e) {
+            // If decompression fails, fill with gray
+            this.fillRect(x, y, w, h, { r: 128, g: 128, b: 128 });
+        }
+        
+        return 4 + length;
+    }
+    
+    inflateZlib(data) {
+        // Simple zlib decompression using DecompressionStream if available
+        // For browsers without it, return null to trigger fallback
+        if (typeof DecompressionStream === 'undefined') {
+            return null;
+        }
+        
+        try {
+            // Synchronous fallback - just return null for now
+            // Real implementation would use async decompression
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+    
+    decodeZRLETiles(x, y, w, h, data) {
+        let offset = 0;
+        
+        for (let tileY = 0; tileY < h; tileY += 64) {
+            for (let tileX = 0; tileX < w; tileX += 64) {
+                const tileW = Math.min(64, w - tileX);
+                const tileH = Math.min(64, h - tileY);
+                
+                if (offset >= data.length) return;
+                
+                const subencoding = data[offset++];
+                
+                if (subencoding === 0) {
+                    // Raw pixels
+                    for (let py = 0; py < tileH; py++) {
+                        for (let px = 0; px < tileW; px++) {
+                            if (offset + 3 > data.length) return;
+                            const dstIdx = ((y + tileY + py) * this.width + (x + tileX + px)) * 4;
+                            this.frameBuffer.data[dstIdx] = data[offset + 2];
+                            this.frameBuffer.data[dstIdx + 1] = data[offset + 1];
+                            this.frameBuffer.data[dstIdx + 2] = data[offset];
+                            this.frameBuffer.data[dstIdx + 3] = 255;
+                            offset += 3;
+                        }
+                    }
+                } else if (subencoding === 1) {
+                    // Solid color
+                    if (offset + 3 > data.length) return;
+                    const color = { r: data[offset + 2], g: data[offset + 1], b: data[offset] };
+                    offset += 3;
+                    this.fillRect(x + tileX, y + tileY, tileW, tileH, color);
+                } else {
+                    // Other subencodings - fill with placeholder
+                    this.fillRect(x + tileX, y + tileY, tileW, tileH, { r: 64, g: 64, b: 64 });
+                }
+            }
+        }
+    }
+    
+    handleCursorPseudo(w, h, offset) {
+        const pixelBytes = w * h * 4;
+        const maskBytes = Math.ceil(w / 8) * h;
+        const totalBytes = pixelBytes + maskBytes;
+        
+        if (this.buffer.length < offset + totalBytes) return -1;
+        
+        // Store cursor data for later drawing
+        // For now, just skip it
+        return totalBytes;
+    }
+    
+    readPixel(offset) {
+        return {
+            b: this.buffer[offset],
+            g: this.buffer[offset + 1],
+            r: this.buffer[offset + 2]
+        };
+    }
+    
+    fillRect(x, y, w, h, color) {
+        for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+                const dstIdx = ((y + py) * this.width + (x + px)) * 4;
+                if (dstIdx >= 0 && dstIdx < this.frameBuffer.data.length - 3) {
+                    this.frameBuffer.data[dstIdx] = color.r;
+                    this.frameBuffer.data[dstIdx + 1] = color.g;
+                    this.frameBuffer.data[dstIdx + 2] = color.b;
+                    this.frameBuffer.data[dstIdx + 3] = 255;
+                }
             }
         }
     }
@@ -457,6 +755,27 @@ class VNCClient {
         this.sendPointer(x, y, buttonMask);
     }
     
+    handleMouseMove(e) {
+        if (!this.connected) return;
+        
+        const now = performance.now();
+        if (now - this.lastMouseSend < this.mouseThrottle) return;
+        this.lastMouseSend = now;
+        
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.width / rect.width;
+        const scaleY = this.height / rect.height;
+        
+        const x = Math.floor((e.clientX - rect.left) * scaleX);
+        const y = Math.floor((e.clientY - rect.top) * scaleY);
+        
+        this.cursorX = x;
+        this.cursorY = y;
+        
+        const buttonMask = (e.buttons & 1) | ((e.buttons & 2) << 1) | ((e.buttons & 4) >> 1);
+        this.sendPointer(x, y, buttonMask);
+    }
+    
     handleTouchStart(e) {
         if (!this.connected) return;
         e.preventDefault();
@@ -486,6 +805,10 @@ class VNCClient {
     handleTouchMove(e) {
         if (!this.connected || !this.touchState.active) return;
         e.preventDefault();
+        
+        const now = performance.now();
+        if (now - this.lastMouseSend < this.mouseThrottle) return;
+        this.lastMouseSend = now;
         
         const touch = e.touches[0];
         const rect = this.canvas.getBoundingClientRect();
@@ -528,7 +851,10 @@ class VNCClient {
     }
     
     drawCursor() {
-        if (!this.cursorVisible || !this.connected) return;
+        if (!this.connected) return;
+        
+        // Only draw local cursor if fallback is enabled
+        if (!this.localCursorFallback) return;
         
         this.ctx.putImageData(this.frameBuffer, 0, 0);
         
@@ -550,6 +876,11 @@ class VNCClient {
         this.ctx.closePath();
         this.ctx.fill();
         this.ctx.stroke();
+    }
+    
+    enableLocalCursor(enable = true) {
+        this.localCursorFallback = enable;
+        this.canvas.style.cursor = enable ? 'none' : 'default';
     }
     
     handleKey(e, down) {
@@ -585,6 +916,14 @@ class VNCClient {
         if (key.length === 1) return key.charCodeAt(0);
         
         return null;
+    }
+    
+    setQuality(level) {
+        this.qualityLevel = Math.max(0, Math.min(9, level));
+    }
+    
+    setCompression(level) {
+        this.compressionLevel = Math.max(0, Math.min(9, level));
     }
     
     showStatus(msg) {

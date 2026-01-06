@@ -222,7 +222,7 @@ io.of('/vnc').on('connection', (socket) => {
     });
     
     vncSocket.on('data', (data) => {
-        socket.emit('vnc-data', Array.from(data));
+        socket.emit('vnc-data', data);
     });
     
     vncSocket.on('error', (err) => {

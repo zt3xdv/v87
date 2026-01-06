@@ -541,9 +541,11 @@ local-hostname: v87-vm
             '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:${port80}-:80`,
             '-device', 'virtio-net-pci,netdev=net0',
             '-device', 'virtio-balloon-pci,id=balloon0',
+            '-usb',
+            '-device', 'usb-tablet',
             '-qmp', `unix:${qmpSocketPath},server,nowait`,
-            '-vnc', `unix:${vncSocketPath}`,
-            '-vga', 'virtio',
+            '-vnc', `unix:${vncSocketPath},lossy=on,non-adaptive=off`,
+            '-vga', 'std',
             '-display', 'none',
             '-serial', 'mon:stdio'
         ];
