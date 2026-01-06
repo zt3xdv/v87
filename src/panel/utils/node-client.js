@@ -11,12 +11,14 @@ export class NodeClient extends EventEmitter {
         this.ws = null;
         this.connected = false;
         this.authenticated = false;
+        this.wasAuthenticated = false;
         this.pendingRequests = new Map();
         this.requestId = 0;
         this.reconnectTimer = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.reconnectDelay = 5000;
+        this.authFailed = false;
     }
 
     connect() {
@@ -24,6 +26,8 @@ export class NodeClient extends EventEmitter {
             this.ws.removeAllListeners();
             this.ws.close();
         }
+
+        this.authFailed = false;
 
         try {
             this.ws = new WebSocket(this.url);
@@ -48,11 +52,24 @@ export class NodeClient extends EventEmitter {
             }
         });
 
-        this.ws.on('close', () => {
+        this.ws.on('close', (code) => {
+            const wasAuth = this.authenticated;
             this.connected = false;
             this.authenticated = false;
-            this.emit('disconnected');
+            
+            // Only emit disconnected if we were previously authenticated
+            if (this.wasAuthenticated) {
+                this.emit('disconnected');
+            }
+            
             this.rejectPendingRequests('Connection closed');
+            
+            // Don't reconnect if auth failed (wrong secret)
+            if (code === 4003 || this.authFailed) {
+                this.emit('error', new Error('Authentication failed - check node secret'));
+                return;
+            }
+            
             this.scheduleReconnect();
         });
 
@@ -65,17 +82,22 @@ export class NodeClient extends EventEmitter {
         this.send('auth', {
             secret: this.secret,
             clientType: 'panel'
-        }).then(() => {
+        }).then((response) => {
             this.authenticated = true;
+            this.wasAuthenticated = true;
             this.emit('connected');
         }).catch((err) => {
+            this.authFailed = true;
             this.emit('error', new Error('Authentication failed: ' + err.message));
-            this.ws.close();
+            if (this.ws) {
+                this.ws.close();
+            }
         });
     }
 
     scheduleReconnect() {
         if (this.reconnectTimer) return;
+        if (this.authFailed) return;
         
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.emit('max-reconnect-attempts');
