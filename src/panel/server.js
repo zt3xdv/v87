@@ -842,6 +842,9 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
                 serverId,
                 userId: user.id,
                 imageId: image.id,
+                imageUrl: image.url,
+                imageName: image.name,
+                imageDefaultUser: image.defaultUser,
                 ram: serverData.ram,
                 disk: serverData.diskSize,
                 cpuCores: serverData.cpuCores

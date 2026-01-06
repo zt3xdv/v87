@@ -257,13 +257,55 @@ export class NodeDaemon {
     }
 
     async handleCreateVM(ws, id, payload) {
-        const { serverId, userId, imageId, ram, disk, cpuCores } = payload || {};
+        const { serverId, userId, imageId, imageUrl, imageName, imageDefaultUser, ram, disk, cpuCores } = payload || {};
 
         if (!serverId || !userId || !imageId) {
             return this.sendError(ws, id, 'serverId, userId, imageId required');
         }
 
         try {
+            // Check if image exists, if not download it
+            const imageExists = await this.imageManager.imageExists(imageId);
+            if (!imageExists) {
+                if (!imageUrl) {
+                    return this.sendError(ws, id, `Image ${imageId} not found and no URL provided`);
+                }
+                
+                this.log(`Image ${imageId} not found, downloading from ${imageUrl}...`);
+                this.sendToPanel('vm-output', { 
+                    serverId, 
+                    data: `Downloading image ${imageName || imageId}...\r\n` 
+                });
+                
+                await this.imageManager.downloadImage(imageId, imageUrl, imageName, (progress) => {
+                    if (progress.percent % 10 === 0) {
+                        this.sendToPanel('vm-output', { 
+                            serverId, 
+                            data: `Download progress: ${progress.percent}%\r\n` 
+                        });
+                    }
+                });
+                
+                // Save default user info
+                if (imageDefaultUser) {
+                    const metadata = await this.imageManager.getImage(imageId);
+                    if (metadata) {
+                        metadata.defaultUser = imageDefaultUser;
+                        const fs = await import('node:fs/promises');
+                        await fs.writeFile(
+                            this.imageManager.getMetadataPath(imageId),
+                            JSON.stringify(metadata, null, 2)
+                        );
+                    }
+                }
+                
+                this.log(`Image ${imageId} downloaded successfully`);
+                this.sendToPanel('vm-output', { 
+                    serverId, 
+                    data: `Image downloaded. Creating VM...\r\n` 
+                });
+            }
+
             const result = await this.vmManager.createVM({
                 serverId,
                 userId,
