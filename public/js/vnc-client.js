@@ -997,23 +997,18 @@ class VNCClient {
             }
         });
         
-        // Toolbar container
+        // Toolbar container - below VNC canvas, not overlapping
         this.toolbar = document.createElement('div');
         this.toolbar.className = 'vnc-mobile-toolbar';
         this.toolbar.style.cssText = `
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: rgba(0,0,0,0.85);
+            width: 100%;
+            background: rgba(0,0,0,0.95);
             padding: 8px;
             display: flex;
             gap: 6px;
             flex-wrap: wrap;
             justify-content: center;
-            z-index: 1000;
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            flex-shrink: 0;
         `;
         
         const buttons = [
@@ -1118,30 +1113,29 @@ class VNCClient {
         });
         
         this.toolbar.appendChild(this.extraPanel);
-        this.container.style.position = 'relative';
+        
+        // Reorganize container for vertical layout
+        this.container.style.flexDirection = 'column';
         this.container.appendChild(this.toolbar);
         
-        // Toggle button (always visible)
+        // Toggle button (show toolbar when hidden)
         this.toggleBtn = document.createElement('button');
-        this.toggleBtn.innerHTML = '☰';
+        this.toggleBtn.innerHTML = '☰ Show Controls';
         this.toggleBtn.title = 'Toggle toolbar';
         this.toggleBtn.style.cssText = `
-            position: absolute;
-            bottom: 8px;
-            right: 8px;
-            width: 44px;
-            height: 44px;
-            background: rgba(0,0,0,0.7);
+            width: 100%;
+            padding: 12px;
+            background: #222;
             color: #fff;
-            border: 1px solid #555;
-            border-radius: 50%;
-            font-size: 20px;
+            border: none;
+            border-top: 1px solid #333;
+            font-size: 14px;
             cursor: pointer;
-            z-index: 1001;
             display: none;
             touch-action: manipulation;
             user-select: none;
             -webkit-user-select: none;
+            flex-shrink: 0;
         `;
         this.toggleBtn.addEventListener('click', () => this.toggleToolbar());
         this.container.appendChild(this.toggleBtn);
@@ -1156,9 +1150,7 @@ class VNCClient {
             this.toolbar.style.display = this.toolbarVisible ? 'flex' : 'none';
         }
         if (this.toggleBtn) {
-            this.toggleBtn.style.display = this.toolbarVisible ? 'none' : 'flex';
-            this.toggleBtn.style.alignItems = 'center';
-            this.toggleBtn.style.justifyContent = 'center';
+            this.toggleBtn.style.display = this.toolbarVisible ? 'none' : 'block';
         }
     }
     
@@ -1166,9 +1158,7 @@ class VNCClient {
         this.toolbarVisible = false;
         if (this.toolbar) this.toolbar.style.display = 'none';
         if (this.toggleBtn) {
-            this.toggleBtn.style.display = 'flex';
-            this.toggleBtn.style.alignItems = 'center';
-            this.toggleBtn.style.justifyContent = 'center';
+            this.toggleBtn.style.display = 'block';
         }
     }
     
