@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/css/xterm.css" />
     <link rel="stylesheet" href="/css/style.css">
     <link rel="stylesheet" href="/css/material/outlined.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <nav class="navbar">
@@ -100,16 +101,63 @@
     <template id="dashboard-template">
         <div class="section-header mb-4">
             <div>
-                <h2 class="mb-1">Your VMs</h2>
-                <p class="text-muted text-xs">Manage your virtual machines</p>
+                <h2 class="mb-1">Dashboard</h2>
+                <p class="text-muted text-xs">Overview of your virtual machines</p>
             </div>
             <a href="/create" class="btn btn-sm btn-accent" onclick="event.preventDefault(); App.navigate('/create')">
                 <span class="material-symbols-outlined icon-sm">add</span>
-                New
+                New VM
             </a>
         </div>
         
-        <div id="server-list" class="server-list">
+        <!-- Stats Overview Cards -->
+        <div class="stats-grid mb-4">
+            <div class="stat-card">
+                <div class="stat-card-icon" style="background: rgba(99, 102, 241, 0.15); color: #818cf8;">
+                    <span class="material-symbols-outlined">dns</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Total VMs</span>
+                    <span class="stat-card-value" id="dash-total-vms">0</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-icon" style="background: rgba(34, 197, 94, 0.15); color: #4ade80;">
+                    <span class="material-symbols-outlined">play_circle</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Running</span>
+                    <span class="stat-card-value" id="dash-running-vms">0</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-icon" style="background: rgba(239, 68, 68, 0.15); color: #f87171;">
+                    <span class="material-symbols-outlined">stop_circle</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Stopped</span>
+                    <span class="stat-card-value" id="dash-stopped-vms">0</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-icon" style="background: rgba(251, 191, 36, 0.15); color: #fbbf24;">
+                    <span class="material-symbols-outlined">memory</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">RAM Used</span>
+                    <span class="stat-card-value" id="dash-ram-used">0 MB</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- VM List Section -->
+        <div class="section-header mb-3">
+            <div>
+                <h3 class="mb-0" style="font-size: 1.1rem;">Your Virtual Machines</h3>
+            </div>
+        </div>
+        
+        <div id="server-list" class="vm-cards-grid">
             <div class="empty-state">
                 <span class="material-symbols-outlined">cloud_off</span>
                 <p class="mb-2">No virtual machines</p>
@@ -127,11 +175,64 @@
             </div>
         </div>
         
-        <div class="inline-stats mb-4">
-            <div class="inline-stat">RAM: <strong><span id="d-ram">0</span>/<span id="d-max-ram"></span>MB</strong></div>
-            <div class="inline-stat">CPU: <strong><span id="d-cpu">0</span>/<span id="d-max-cpu"></span>%</strong></div>
-            <div class="inline-stat">Disk: <strong><span id="d-disk">0</span>/<span id="d-max-disk"></span>GB</strong></div>
-            <div class="inline-stat">Slots: <strong><span id="d-slots">0</span>/<span id="d-max-slots"></span></strong></div>
+        <!-- Resource Usage Indicators -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="material-symbols-outlined icon-sm mr-2">data_usage</span>
+                Resource Availability
+            </div>
+            <div class="card-body">
+                <div class="resource-bars">
+                    <div class="resource-bar-item">
+                        <div class="resource-bar-header">
+                            <span class="resource-bar-label">
+                                <span class="material-symbols-outlined icon-xs">memory</span>
+                                RAM
+                            </span>
+                            <span class="resource-bar-value"><span id="d-ram">0</span> / <span id="d-max-ram">0</span> MB</span>
+                        </div>
+                        <div class="resource-bar-track">
+                            <div class="resource-bar-fill" id="ram-bar" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                    <div class="resource-bar-item">
+                        <div class="resource-bar-header">
+                            <span class="resource-bar-label">
+                                <span class="material-symbols-outlined icon-xs">speed</span>
+                                CPU
+                            </span>
+                            <span class="resource-bar-value"><span id="d-cpu">0</span> / <span id="d-max-cpu">0</span> %</span>
+                        </div>
+                        <div class="resource-bar-track">
+                            <div class="resource-bar-fill" id="cpu-bar" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                    <div class="resource-bar-item">
+                        <div class="resource-bar-header">
+                            <span class="resource-bar-label">
+                                <span class="material-symbols-outlined icon-xs">storage</span>
+                                Disk
+                            </span>
+                            <span class="resource-bar-value"><span id="d-disk">0</span> / <span id="d-max-disk">0</span> GB</span>
+                        </div>
+                        <div class="resource-bar-track">
+                            <div class="resource-bar-fill" id="disk-bar" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                    <div class="resource-bar-item">
+                        <div class="resource-bar-header">
+                            <span class="resource-bar-label">
+                                <span class="material-symbols-outlined icon-xs">dns</span>
+                                VM Slots
+                            </span>
+                            <span class="resource-bar-value"><span id="d-slots">0</span> / <span id="d-max-slots">0</span></span>
+                        </div>
+                        <div class="resource-bar-track">
+                            <div class="resource-bar-fill" id="slots-bar" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <div class="card">
@@ -274,75 +375,131 @@
         </div>
         
         <div id="stats-content">
-            <div class="d-flex gap-3 flex-wrap mb-4">
-                <div class="card" style="flex: 1; min-width: 200px;">
-                    <div class="card-header">
-                        <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">schedule</span>
-                        Uptime
+            <!-- Main Metrics Cards -->
+            <div class="metrics-grid mb-4">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);">
+                        <span class="material-symbols-outlined">schedule</span>
                     </div>
-                    <div class="card-body">
-                        <h3 id="stat-uptime" class="mb-0">-</h3>
-                    </div>
-                </div>
-                <div class="card" style="flex: 1; min-width: 200px;">
-                    <div class="card-header">
-                        <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">memory</span>
-                        CPU Usage
-                    </div>
-                    <div class="card-body">
-                        <h3 id="stat-cpu" class="mb-0">-</h3>
-                        <small class="text-muted" id="stat-cpu-cores">-</small>
+                    <div class="metric-info">
+                        <span class="metric-label">Uptime</span>
+                        <span class="metric-value" id="stat-uptime">-</span>
                     </div>
                 </div>
-                <div class="card" style="flex: 1; min-width: 200px;">
-                    <div class="card-header">
-                        <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">developer_board</span>
-                        Memory
+                <div class="metric-card">
+                    <div class="metric-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);">
+                        <span class="material-symbols-outlined">memory</span>
                     </div>
-                    <div class="card-body">
-                        <h3 id="stat-memory" class="mb-0">-</h3>
+                    <div class="metric-info">
+                        <span class="metric-label">CPU Usage</span>
+                        <span class="metric-value" id="stat-cpu">-</span>
+                        <span class="metric-sub" id="stat-cpu-cores">-</span>
                     </div>
                 </div>
-            </div>
-            
-            <div class="card mb-4">
-                <div class="card-header">
-                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">storage</span>
-                    Disk I/O
+                <div class="metric-card">
+                    <div class="metric-icon" style="background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);">
+                        <span class="material-symbols-outlined">developer_board</span>
+                    </div>
+                    <div class="metric-info">
+                        <span class="metric-label">Memory</span>
+                        <span class="metric-value" id="stat-memory">-</span>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <div class="stat-item">
-                        <span>Read</span>
-                        <span id="stat-disk-read">-</span>
+                <div class="metric-card">
+                    <div class="metric-icon" style="background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);">
+                        <span class="material-symbols-outlined">tag</span>
                     </div>
-                    <div class="stat-item">
-                        <span>Written</span>
-                        <span id="stat-disk-write">-</span>
-                    </div>
-                    <div class="stat-item">
-                        <span>Read Operations</span>
-                        <span id="stat-disk-read-ops">-</span>
-                    </div>
-                    <div class="stat-item">
-                        <span>Write Operations</span>
-                        <span id="stat-disk-write-ops">-</span>
+                    <div class="metric-info">
+                        <span class="metric-label">PID</span>
+                        <span class="metric-value" id="stat-pid">-</span>
+                        <span class="metric-sub" id="stat-started">-</span>
                     </div>
                 </div>
             </div>
             
-            <div class="card">
-                <div class="card-header">
-                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">info</span>
-                    Process Info
-                </div>
-                <div class="card-body">
-                    <div class="stat-item">
-                        <span>PID</span>
-                        <span id="stat-pid">-</span>
+            <!-- Charts Section -->
+            <div class="charts-grid mb-4">
+                <div class="card chart-card">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm mr-2">show_chart</span>
+                        CPU History
                     </div>
-                    <div class="stat-item">
-                        <span>Started At</span>
-                        <span id="stat-started">-</span>
+                    <div class="card-body">
+                        <div id="cpu-chart-container" class="chart-container">
+                            <canvas id="cpu-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="card chart-card">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm mr-2">show_chart</span>
+                        Memory History
+                    </div>
+                    <div class="card-body">
+                        <div id="memory-chart-container" class="chart-container">
+                            <canvas id="memory-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Disk Section -->
+            <div class="d-flex gap-3 flex-wrap">
+                <div class="card" style="flex: 2; min-width: 280px;">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm mr-2">storage</span>
+                        Disk I/O
+                    </div>
+                    <div class="card-body">
+                        <div class="disk-io-grid">
+                            <div class="disk-io-item">
+                                <span class="disk-io-icon read">
+                                    <span class="material-symbols-outlined icon-xs">arrow_downward</span>
+                                </span>
+                                <div class="disk-io-info">
+                                    <span class="disk-io-label">Read</span>
+                                    <span class="disk-io-value" id="stat-disk-read">-</span>
+                                </div>
+                            </div>
+                            <div class="disk-io-item">
+                                <span class="disk-io-icon write">
+                                    <span class="material-symbols-outlined icon-xs">arrow_upward</span>
+                                </span>
+                                <div class="disk-io-info">
+                                    <span class="disk-io-label">Written</span>
+                                    <span class="disk-io-value" id="stat-disk-write">-</span>
+                                </div>
+                            </div>
+                            <div class="disk-io-item">
+                                <span class="disk-io-icon read">
+                                    <span class="material-symbols-outlined icon-xs">sync</span>
+                                </span>
+                                <div class="disk-io-info">
+                                    <span class="disk-io-label">Read Ops</span>
+                                    <span class="disk-io-value" id="stat-disk-read-ops">-</span>
+                                </div>
+                            </div>
+                            <div class="disk-io-item">
+                                <span class="disk-io-icon write">
+                                    <span class="material-symbols-outlined icon-xs">sync</span>
+                                </span>
+                                <div class="disk-io-info">
+                                    <span class="disk-io-label">Write Ops</span>
+                                    <span class="disk-io-value" id="stat-disk-write-ops">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" style="flex: 1; min-width: 200px;">
+                    <div class="card-header">
+                        <span class="material-symbols-outlined icon-sm mr-2">donut_large</span>
+                        Disk Usage
+                    </div>
+                    <div class="card-body d-flex justify-center align-center">
+                        <div id="disk-chart-container" style="width: 160px; height: 160px;">
+                            <canvas id="disk-chart"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -657,38 +814,40 @@
 
     <!-- ADMIN LAYOUT -->
     <template id="admin-layout-template">
-        <div class="mb-5">
-            <h2 class="mb-1">
-                <span class="material-symbols-outlined icon-md" style="margin-right: 8px; vertical-align: -4px;">admin_panel_settings</span>
-                Admin Panel
-            </h2>
-            <p class="text-secondary text-sm mb-0">Manage VMs, users, and system configuration.</p>
+        <div class="admin-hero mb-5">
+            <div class="admin-hero-icon">
+                <span class="material-symbols-outlined">admin_panel_settings</span>
+            </div>
+            <div class="admin-hero-text">
+                <h2 class="mb-1">Admin Panel</h2>
+                <p class="text-secondary text-sm mb-0">Manage VMs, users, and system configuration</p>
+            </div>
         </div>
         
-        <div class="server-tabs mb-4">
-            <button class="tab-btn" id="tab-servers">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">computer</span>
-                VMs
+        <div class="admin-nav-pills mb-4">
+            <button class="admin-pill" id="tab-servers">
+                <span class="material-symbols-outlined">computer</span>
+                <span>VMs</span>
             </button>
-            <button class="tab-btn" id="tab-users">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">group</span>
-                Users
+            <button class="admin-pill" id="tab-users">
+                <span class="material-symbols-outlined">group</span>
+                <span>Users</span>
             </button>
-            <button class="tab-btn" id="tab-nodes">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">dns</span>
-                Nodes
+            <button class="admin-pill" id="tab-nodes">
+                <span class="material-symbols-outlined">dns</span>
+                <span>Nodes</span>
             </button>
-            <button class="tab-btn" id="tab-audit">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">history</span>
-                Audit Log
+            <button class="admin-pill" id="tab-audit">
+                <span class="material-symbols-outlined">history</span>
+                <span>Audit</span>
             </button>
-            <button class="tab-btn" id="tab-maintenance">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">build</span>
-                Maintenance
+            <button class="admin-pill" id="tab-maintenance">
+                <span class="material-symbols-outlined">build</span>
+                <span>Maintenance</span>
             </button>
-            <button class="tab-btn" id="tab-config">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">settings</span>
-                Config
+            <button class="admin-pill" id="tab-config">
+                <span class="material-symbols-outlined">settings</span>
+                <span>Config</span>
             </button>
         </div>
         
@@ -697,182 +856,203 @@
     
     <!-- ADMIN SERVERS TAB -->
     <template id="admin-servers-template">
-        <div class="card">
-            <div class="card-header d-flex justify-between align-center">
-                <span>All Virtual Machines</span>
-                <input type="text" id="admin-server-search" class="form-control" placeholder="Search..." style="max-width: 200px; padding: 0.4rem 0.75rem;">
+        <div class="admin-section-header">
+            <div class="admin-search-bar">
+                <span class="material-symbols-outlined">search</span>
+                <input type="text" id="admin-server-search" placeholder="Search VMs...">
             </div>
-            <div class="card-body">
-                <div style="overflow-x: auto;">
-                    <table class="file-table">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Owner</th>
-                                <th>Image</th>
-                                <th>Status</th>
-                                <th style="text-align: right;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="admin-servers-list"></tbody>
-                    </table>
-                </div>
-                <div id="admin-servers-pagination" class="text-muted text-sm mt-3"></div>
-            </div>
+            <span class="admin-count" id="admin-servers-count">0 VMs</span>
         </div>
+        <div id="admin-servers-list" class="admin-cards-grid"></div>
+        <div id="admin-servers-pagination" class="admin-pagination"></div>
     </template>
     
     <!-- ADMIN USERS TAB -->
     <template id="admin-users-template">
-        <div class="card">
-            <div class="card-header">
-                <span>All Users</span>
+        <div class="admin-section-header">
+            <div class="admin-search-bar">
+                <span class="material-symbols-outlined">search</span>
+                <input type="text" id="admin-user-search" placeholder="Search users...">
             </div>
-            <div class="card-body">
-                <div style="overflow-x: auto;">
-                    <table class="file-table">
-                        <thead>
-                            <tr>
-                                <th>User</th>
-                                <th>Role</th>
-                                <th>VMs</th>
-                                <th>Status</th>
-                                <th style="text-align: right;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="admin-users-list"></tbody>
-                    </table>
-                </div>
-            </div>
+            <span class="admin-count" id="admin-users-count">0 users</span>
         </div>
+        <div id="admin-users-list" class="admin-cards-grid"></div>
     </template>
     
     <!-- ADMIN CONFIG TAB -->
     <template id="admin-config-template">
-        <div class="admin-stats mb-4">
-            <div class="stat-card">
-                <div class="stat-icon"><span class="material-symbols-outlined">group</span></div>
-                <div><div class="stat-value" id="cfg-total-users">-</div><div class="stat-label">Users</div></div>
+        <div class="admin-stats-modern mb-4">
+            <div class="stat-card-modern stat-users">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">group</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-value" id="cfg-total-users">-</span>
+                    <span class="stat-label">Users</span>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-icon"><span class="material-symbols-outlined">computer</span></div>
-                <div><div class="stat-value" id="cfg-total-servers">-</div><div class="stat-label">Total VMs</div></div>
+            <div class="stat-card-modern stat-vms">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">computer</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-value" id="cfg-total-servers">-</span>
+                    <span class="stat-label">Total VMs</span>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-icon" style="background: rgba(34, 197, 94, 0.1); color: var(--success);"><span class="material-symbols-outlined">play_circle</span></div>
-                <div><div class="stat-value" id="cfg-running">-</div><div class="stat-label">Running</div></div>
+            <div class="stat-card-modern stat-running">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">play_circle</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-value" id="cfg-running">-</span>
+                    <span class="stat-label">Running</span>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-icon"><span class="material-symbols-outlined">dns</span></div>
-                <div><div class="stat-value" id="cfg-port">-</div><div class="stat-label">Port</div></div>
+            <div class="stat-card-modern stat-port">
+                <div class="stat-card-icon">
+                    <span class="material-symbols-outlined">dns</span>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-value" id="cfg-port">-</span>
+                    <span class="stat-label">Port</span>
+                </div>
             </div>
         </div>
         
-        <div class="card mb-4">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">tune</span>
-                Resource Limits
-            </div>
-            <div class="card-body">
-                <div id="config-success" class="alert alert-success hidden">
-                    <span class="material-symbols-outlined icon-sm">check_circle</span>
-                    Configuration saved
+        <div id="config-success" class="alert alert-success hidden mb-4">
+            <span class="material-symbols-outlined icon-sm">check_circle</span>
+            Configuration saved
+        </div>
+        
+        <div class="config-cards-grid">
+            <div class="config-card">
+                <div class="config-card-header">
+                    <span class="material-symbols-outlined">tune</span>
+                    <span>Max Resources (per user)</span>
                 </div>
-                <form id="config-form">
-                    <p class="text-muted text-sm mb-3">Maximum resources per user (non-admin)</p>
-                    <div class="d-flex gap-3 mb-3 flex-wrap">
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
+                <form id="config-form" class="config-card-body">
+                    <div class="config-slider-group">
+                        <div class="config-slider-item">
                             <label>Max VMs</label>
-                            <input type="number" id="cfg-max-servers" class="form-control" required>
+                            <input type="number" id="cfg-max-servers" class="config-input" required>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Max RAM (MB)</label>
-                            <input type="number" id="cfg-max-ram" class="form-control" required>
+                        <div class="config-slider-item">
+                            <label>Max RAM</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-max-ram" class="config-input" required>
+                                <span class="config-unit">MB</span>
+                            </div>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Max Disk (GB)</label>
-                            <input type="number" id="cfg-max-disk" class="form-control" required>
+                        <div class="config-slider-item">
+                            <label>Max Disk</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-max-disk" class="config-input" required>
+                                <span class="config-unit">GB</span>
+                            </div>
                         </div>
-                    </div>
-                    <div class="d-flex gap-3 mb-3 flex-wrap">
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Max CPU (%)</label>
-                            <input type="number" id="cfg-max-cpu" class="form-control" required>
+                        <div class="config-slider-item">
+                            <label>Max CPU</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-max-cpu" class="config-input" required>
+                                <span class="config-unit">%</span>
+                            </div>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Max I/O (MB/s)</label>
-                            <input type="number" id="cfg-max-io" class="form-control" required>
-                        </div>
-                    </div>
-                    <p class="text-muted text-sm mb-3 mt-4">Minimum resources per VM</p>
-                    <div class="d-flex gap-3 mb-4 flex-wrap">
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Min RAM (MB)</label>
-                            <input type="number" id="cfg-min-ram" class="form-control" required>
-                        </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Min Disk (GB)</label>
-                            <input type="number" id="cfg-min-disk" class="form-control" required>
-                        </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Min CPU (%)</label>
-                            <input type="number" id="cfg-min-cpu" class="form-control" required>
+                        <div class="config-slider-item">
+                            <label>Max I/O</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-max-io" class="config-input" required>
+                                <span class="config-unit">MB/s</span>
+                            </div>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-accent">
+                    <div class="config-card-divider"></div>
+                    <span class="config-section-label">Minimum per VM</span>
+                    <div class="config-slider-group">
+                        <div class="config-slider-item">
+                            <label>Min RAM</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-min-ram" class="config-input" required>
+                                <span class="config-unit">MB</span>
+                            </div>
+                        </div>
+                        <div class="config-slider-item">
+                            <label>Min Disk</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-min-disk" class="config-input" required>
+                                <span class="config-unit">GB</span>
+                            </div>
+                        </div>
+                        <div class="config-slider-item">
+                            <label>Min CPU</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-min-cpu" class="config-input" required>
+                                <span class="config-unit">%</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-accent btn-block mt-3">
                         <span class="material-symbols-outlined icon-sm">save</span>
-                        Save Configuration
+                        Save Limits
                     </button>
                 </form>
             </div>
-        </div>
-        
-        <div class="card mb-4">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">settings</span>
-                VM Defaults
-            </div>
-            <div class="card-body">
-                <form id="defaults-form">
-                    <div class="d-flex gap-3 mb-4 flex-wrap">
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Default RAM (MB)</label>
-                            <input type="number" id="cfg-def-ram" class="form-control">
+            
+            <div class="config-card">
+                <div class="config-card-header">
+                    <span class="material-symbols-outlined">settings</span>
+                    <span>VM Defaults</span>
+                </div>
+                <form id="defaults-form" class="config-card-body">
+                    <div class="config-slider-group">
+                        <div class="config-slider-item">
+                            <label>Default RAM</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-def-ram" class="config-input">
+                                <span class="config-unit">MB</span>
+                            </div>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Default Disk (GB)</label>
-                            <input type="number" id="cfg-def-disk" class="form-control">
+                        <div class="config-slider-item">
+                            <label>Default Disk</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-def-disk" class="config-input">
+                                <span class="config-unit">GB</span>
+                            </div>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Default CPU (%)</label>
-                            <input type="number" id="cfg-def-cpu" class="form-control">
+                        <div class="config-slider-item">
+                            <label>Default CPU</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-def-cpu" class="config-input">
+                                <span class="config-unit">%</span>
+                            </div>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 120px;">
-                            <label>Default I/O (MB/s)</label>
-                            <input type="number" id="cfg-def-io" class="form-control">
+                        <div class="config-slider-item">
+                            <label>Default I/O</label>
+                            <div class="config-input-with-unit">
+                                <input type="number" id="cfg-def-io" class="config-input">
+                                <span class="config-unit">MB/s</span>
+                            </div>
                             <small class="text-muted">0 = unlimited</small>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-secondary">
+                    <button type="submit" class="btn btn-secondary btn-block mt-3">
                         <span class="material-symbols-outlined icon-sm">save</span>
                         Save Defaults
                     </button>
                 </form>
             </div>
-        </div>
-        
-        <div class="card" style="border-color: var(--danger);">
-            <div class="card-header" style="color: var(--danger);">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">warning</span>
-                Danger Zone
-            </div>
-            <div class="card-body">
-                <div class="d-flex gap-2 flex-wrap align-center">
-                    <button id="btn-stop-all" class="btn btn-secondary">
+            
+            <div class="config-card config-card-danger">
+                <div class="config-card-header danger">
+                    <span class="material-symbols-outlined">warning</span>
+                    <span>Danger Zone</span>
+                </div>
+                <div class="config-card-body">
+                    <p class="text-muted text-sm mb-3">Force stop all running virtual machines</p>
+                    <button id="btn-stop-all" class="btn btn-danger btn-block">
                         <span class="material-symbols-outlined icon-sm">stop</span>
                         Stop All VMs
                     </button>
-                    <span class="text-muted text-sm">Force stop all running virtual machines</span>
                 </div>
             </div>
         </div>
@@ -880,159 +1060,166 @@
     
     <!-- ADMIN AUDIT LOG TAB -->
     <template id="admin-audit-template">
-        <div class="card">
-            <div class="card-header d-flex justify-between align-center">
-                <span>
-                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">history</span>
-                    Audit Log
-                </span>
-                <div class="d-flex gap-2">
-                    <select id="audit-filter-action" class="form-control" style="max-width: 150px; padding: 0.4rem;">
-                        <option value="">All Actions</option>
-                        <option value="login">Login</option>
-                        <option value="register">Register</option>
-                        <option value="vm_create">VM Create</option>
-                        <option value="vm_delete">VM Delete</option>
-                        <option value="vm_start">VM Start</option>
-                        <option value="vm_stop">VM Stop</option>
-                    </select>
-                    <button id="btn-refresh-audit" class="btn btn-sm btn-secondary">
-                        <span class="material-symbols-outlined icon-sm">refresh</span>
-                    </button>
-                </div>
+        <div class="admin-section-header">
+            <div class="d-flex gap-2 align-center">
+                <select id="audit-filter-action" class="admin-filter-select">
+                    <option value="">All Actions</option>
+                    <option value="login">Login</option>
+                    <option value="register">Register</option>
+                    <option value="vm_create">VM Create</option>
+                    <option value="vm_delete">VM Delete</option>
+                    <option value="vm_start">VM Start</option>
+                    <option value="vm_stop">VM Stop</option>
+                </select>
+                <button id="btn-refresh-audit" class="btn btn-sm btn-secondary">
+                    <span class="material-symbols-outlined icon-sm">refresh</span>
+                </button>
             </div>
-            <div class="card-body">
-                <div style="overflow-x: auto;">
-                    <table class="file-table">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>User</th>
-                                <th>Action</th>
-                                <th>Details</th>
-                            </tr>
-                        </thead>
-                        <tbody id="audit-logs-list"></tbody>
-                    </table>
-                </div>
-                <div class="d-flex gap-2 mt-3">
-                    <button id="btn-audit-prev" class="btn btn-sm btn-secondary" disabled>Previous</button>
-                    <button id="btn-audit-next" class="btn btn-sm btn-secondary">Next</button>
-                </div>
-            </div>
+        </div>
+        <div id="audit-logs-list" class="audit-timeline"></div>
+        <div class="d-flex gap-2 mt-4 justify-center">
+            <button id="btn-audit-prev" class="btn btn-sm btn-secondary" disabled>
+                <span class="material-symbols-outlined icon-sm">chevron_left</span>
+            </button>
+            <button id="btn-audit-next" class="btn btn-sm btn-secondary">
+                <span class="material-symbols-outlined icon-sm">chevron_right</span>
+            </button>
         </div>
     </template>
     
     <!-- ADMIN MAINTENANCE TAB -->
     <template id="admin-maintenance-template">
-        <div class="card mb-4">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">settings</span>
-                General Settings
-            </div>
-            <div class="card-body">
-                <div id="settings-success" class="alert alert-success hidden mb-3">Settings saved</div>
-                <div class="form-group">
-                    <label class="d-flex align-center gap-2">
-                        <input type="checkbox" id="setting-disable-registration" style="width: auto;">
-                        Disable Registration
-                    </label>
-                    <small class="text-muted">When enabled, new users cannot register (first user can still register as admin)</small>
-                </div>
-                <button id="btn-save-settings" class="btn btn-accent">
-                    <span class="material-symbols-outlined icon-sm">save</span>
-                    Save Settings
-                </button>
-            </div>
-        </div>
+        <div id="settings-success" class="alert alert-success hidden mb-4">Settings saved</div>
         
-        <div class="card mb-4">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">build</span>
-                Maintenance Mode
-            </div>
-            <div class="card-body">
-                <div id="maintenance-status" class="mb-4"></div>
-                <div class="form-group">
-                    <label class="d-flex align-center gap-2">
-                        <input type="checkbox" id="maint-enabled" style="width: auto;">
-                        Enable Maintenance Mode
-                    </label>
-                    <small class="text-muted">When enabled, non-admin users cannot access the panel</small>
+        <div class="maintenance-cards-grid">
+            <div class="maintenance-card">
+                <div class="maintenance-card-header">
+                    <span class="material-symbols-outlined">person_off</span>
+                    <span>Registration</span>
                 </div>
-                <div class="form-group">
-                    <label>Maintenance Message</label>
-                    <input type="text" id="maint-message" class="form-control" placeholder="System is under maintenance">
-                </div>
-                <div class="form-group">
-                    <label class="d-flex align-center gap-2">
-                        <input type="checkbox" id="maint-stop-vms" style="width: auto;">
-                        Stop all VMs when enabling
-                    </label>
-                </div>
-                <button id="btn-save-maintenance" class="btn btn-accent">
-                    <span class="material-symbols-outlined icon-sm">save</span>
-                    Save
-                </button>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">swap_horiz</span>
-                Transfer VM
-            </div>
-            <div class="card-body">
-                <p class="text-muted text-sm mb-3">Transfer ownership of a VM to another user.</p>
-                <div class="d-flex gap-3 flex-wrap mb-3">
-                    <div class="form-group" style="flex: 1; min-width: 200px;">
-                        <label>Select VM</label>
-                        <select id="transfer-server" class="form-control">
-                            <option value="">Loading...</option>
-                        </select>
-                    </div>
-                    <div class="form-group" style="flex: 1; min-width: 200px;">
-                        <label>New Owner</label>
-                        <select id="transfer-user" class="form-control">
-                            <option value="">Loading...</option>
-                        </select>
+                <div class="maintenance-card-body">
+                    <div class="toggle-switch-row">
+                        <div class="toggle-switch-info">
+                            <span class="toggle-switch-title">Disable Registration</span>
+                            <span class="toggle-switch-desc">Block new user signups</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="setting-disable-registration">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                 </div>
-                <button id="btn-transfer-vm" class="btn btn-secondary">
-                    <span class="material-symbols-outlined icon-sm">swap_horiz</span>
-                    Transfer VM
-                </button>
-                <span id="transfer-status" class="text-sm ml-3"></span>
+                <div class="maintenance-card-footer">
+                    <button id="btn-save-settings" class="btn btn-accent btn-sm">
+                        <span class="material-symbols-outlined icon-sm">save</span>
+                        Save
+                    </button>
+                </div>
+            </div>
+            
+            <div class="maintenance-card">
+                <div class="maintenance-card-header">
+                    <span class="material-symbols-outlined">build</span>
+                    <span>Maintenance Mode</span>
+                </div>
+                <div class="maintenance-card-body">
+                    <div id="maintenance-status" class="mb-3"></div>
+                    <div class="toggle-switch-row mb-3">
+                        <div class="toggle-switch-info">
+                            <span class="toggle-switch-title">Enable Maintenance</span>
+                            <span class="toggle-switch-desc">Block non-admin access</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="maint-enabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group mb-3">
+                        <label class="text-sm">Message</label>
+                        <input type="text" id="maint-message" class="form-control" placeholder="System is under maintenance">
+                    </div>
+                    <div class="toggle-switch-row">
+                        <div class="toggle-switch-info">
+                            <span class="toggle-switch-title">Stop all VMs</span>
+                            <span class="toggle-switch-desc">When enabling maintenance</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="maint-stop-vms">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="maintenance-card-footer">
+                    <button id="btn-save-maintenance" class="btn btn-accent btn-sm">
+                        <span class="material-symbols-outlined icon-sm">save</span>
+                        Save
+                    </button>
+                </div>
+            </div>
+            
+            <div class="maintenance-card maintenance-card-wide">
+                <div class="maintenance-card-header">
+                    <span class="material-symbols-outlined">swap_horiz</span>
+                    <span>Transfer VM Ownership</span>
+                </div>
+                <div class="maintenance-card-body">
+                    <div class="transfer-grid">
+                        <div class="form-group">
+                            <label class="text-sm">Select VM</label>
+                            <select id="transfer-server" class="form-control">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                        <div class="transfer-arrow">
+                            <span class="material-symbols-outlined">arrow_forward</span>
+                        </div>
+                        <div class="form-group">
+                            <label class="text-sm">New Owner</label>
+                            <select id="transfer-user" class="form-control">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="maintenance-card-footer">
+                    <button id="btn-transfer-vm" class="btn btn-secondary btn-sm">
+                        <span class="material-symbols-outlined icon-sm">swap_horiz</span>
+                        Transfer
+                    </button>
+                    <span id="transfer-status" class="text-sm"></span>
+                </div>
             </div>
         </div>
     </template>
     
     <!-- ACCOUNT SETTINGS PAGE -->
     <template id="account-template">
-        <div class="mb-5">
-            <h2 class="mb-1">
-                <span class="material-symbols-outlined icon-md" style="margin-right: 8px; vertical-align: -4px;">account_circle</span>
-                Account Settings
-            </h2>
-            <p class="text-secondary text-sm mb-0">Manage your API keys, webhooks, and preferences.</p>
+        <div class="account-hero mb-4">
+            <div class="account-hero-avatar" id="account-avatar">
+                <span class="material-symbols-outlined">person</span>
+            </div>
+            <div class="account-hero-info">
+                <h2 class="account-hero-name" id="account-username">User</h2>
+                <span class="account-hero-role" id="account-role">Member</span>
+            </div>
         </div>
         
-        <div class="server-tabs mb-4">
-            <button class="tab-btn active" id="tab-apikeys">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">key</span>
-                API Keys
+        <div class="account-nav-pills mb-4">
+            <button class="account-pill active" id="tab-apikeys">
+                <span class="material-symbols-outlined">key</span>
+                <span>API Keys</span>
             </button>
-            <button class="tab-btn" id="tab-webhooks">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">webhook</span>
-                Webhooks
+            <button class="account-pill" id="tab-webhooks">
+                <span class="material-symbols-outlined">webhook</span>
+                <span>Webhooks</span>
             </button>
-            <button class="tab-btn" id="tab-prefs">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">tune</span>
-                Preferences
+            <button class="account-pill" id="tab-prefs">
+                <span class="material-symbols-outlined">tune</span>
+                <span>Preferences</span>
             </button>
-            <button class="tab-btn" id="tab-activity">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 4px;">history</span>
-                Activity
+            <button class="account-pill" id="tab-activity">
+                <span class="material-symbols-outlined">history</span>
+                <span>Activity</span>
             </button>
         </div>
         
@@ -1041,49 +1228,58 @@
     
     <!-- API KEYS TAB -->
     <template id="apikeys-template">
-        <div class="card">
-            <div class="card-header d-flex justify-between align-center">
-                <span>
-                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">key</span>
-                    API Keys
-                </span>
-                <button id="btn-create-key" class="btn btn-sm btn-accent">
-                    <span class="material-symbols-outlined icon-sm">add</span>
-                    Create Key
-                </button>
+        <div class="account-section-header">
+            <div class="account-section-info">
+                <h3>API Keys</h3>
+                <p>Use API keys to access your VMs programmatically</p>
             </div>
-            <div class="card-body">
-                <p class="text-muted text-sm mb-3">Use API keys to access your VMs programmatically. Maximum 5 keys.</p>
-                <div id="new-key-alert" class="alert alert-success hidden mb-3">
-                    <strong>New API Key Created:</strong>
-                    <code id="new-key-value" style="display: block; margin-top: 0.5rem; word-break: break-all;"></code>
-                    <small class="text-muted">Copy this key now. It won't be shown again.</small>
-                </div>
-                <div id="apikeys-list"></div>
+            <button id="btn-create-key" class="btn btn-sm btn-accent">
+                <span class="material-symbols-outlined icon-sm">add</span>
+                Create Key
+            </button>
+        </div>
+        
+        <div id="new-key-alert" class="account-key-created hidden">
+            <div class="account-key-created-icon">
+                <span class="material-symbols-outlined">check_circle</span>
+            </div>
+            <div class="account-key-created-content">
+                <strong>New API Key Created</strong>
+                <code id="new-key-value"></code>
+                <small>Copy this key now. It won't be shown again.</small>
             </div>
         </div>
         
-        <div id="create-key-form" class="card mt-4 hidden">
-            <div class="card-header">Create New API Key</div>
-            <div class="card-body">
+        <div id="apikeys-list" class="account-items-list"></div>
+        
+        <div id="create-key-form" class="account-form-card hidden">
+            <div class="account-form-header">
+                <span class="material-symbols-outlined">add_circle</span>
+                Create New API Key
+            </div>
+            <div class="account-form-body">
                 <div class="form-group">
                     <label>Key Name</label>
                     <input type="text" id="key-name" class="form-control" placeholder="My API Key">
                 </div>
                 <div class="form-group">
                     <label>Permissions</label>
-                    <div class="d-flex gap-3">
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" id="key-perm-read" checked style="width: auto;"> Read
+                    <div class="account-permissions">
+                        <label class="account-perm-item">
+                            <input type="checkbox" id="key-perm-read" checked>
+                            <span class="account-perm-check"></span>
+                            <span>Read</span>
                         </label>
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" id="key-perm-write" style="width: auto;"> Write
+                        <label class="account-perm-item">
+                            <input type="checkbox" id="key-perm-write">
+                            <span class="account-perm-check"></span>
+                            <span>Write</span>
                         </label>
                     </div>
                 </div>
-                <div class="d-flex gap-2">
-                    <button id="btn-save-key" class="btn btn-success">Create Key</button>
+                <div class="account-form-actions">
                     <button id="btn-cancel-key" class="btn btn-secondary">Cancel</button>
+                    <button id="btn-save-key" class="btn btn-accent">Create Key</button>
                 </div>
             </div>
         </div>
@@ -1091,26 +1287,25 @@
     
     <!-- WEBHOOKS TAB -->
     <template id="webhooks-template">
-        <div class="card">
-            <div class="card-header d-flex justify-between align-center">
-                <span>
-                    <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">webhook</span>
-                    Webhooks
-                </span>
-                <button id="btn-create-webhook" class="btn btn-sm btn-accent">
-                    <span class="material-symbols-outlined icon-sm">add</span>
-                    Create Webhook
-                </button>
+        <div class="account-section-header">
+            <div class="account-section-info">
+                <h3>Webhooks</h3>
+                <p>Receive HTTP notifications for VM events</p>
             </div>
-            <div class="card-body">
-                <p class="text-muted text-sm mb-3">Receive HTTP notifications for VM events. Maximum 5 webhooks.</p>
-                <div id="webhooks-list"></div>
-            </div>
+            <button id="btn-create-webhook" class="btn btn-sm btn-accent">
+                <span class="material-symbols-outlined icon-sm">add</span>
+                Create Webhook
+            </button>
         </div>
         
-        <div id="create-webhook-form" class="card mt-4 hidden">
-            <div class="card-header">Create New Webhook</div>
-            <div class="card-body">
+        <div id="webhooks-list" class="account-items-list"></div>
+        
+        <div id="create-webhook-form" class="account-form-card hidden">
+            <div class="account-form-header">
+                <span class="material-symbols-outlined">add_circle</span>
+                Create New Webhook
+            </div>
+            <div class="account-form-body">
                 <div class="form-group">
                     <label>Name</label>
                     <input type="text" id="wh-name" class="form-control" placeholder="My Webhook">
@@ -1125,27 +1320,47 @@
                 </div>
                 <div class="form-group">
                     <label>Events</label>
-                    <div class="d-flex gap-3 flex-wrap">
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" class="wh-event" value="vm_start" style="width: auto;"> VM Start
+                    <div class="account-events-grid">
+                        <label class="account-event-item">
+                            <input type="checkbox" class="wh-event" value="vm_start">
+                            <span class="account-event-box">
+                                <span class="material-symbols-outlined">play_circle</span>
+                                VM Start
+                            </span>
                         </label>
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" class="wh-event" value="vm_stop" style="width: auto;"> VM Stop
+                        <label class="account-event-item">
+                            <input type="checkbox" class="wh-event" value="vm_stop">
+                            <span class="account-event-box">
+                                <span class="material-symbols-outlined">stop_circle</span>
+                                VM Stop
+                            </span>
                         </label>
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" class="wh-event" value="vm_create" style="width: auto;"> VM Create
+                        <label class="account-event-item">
+                            <input type="checkbox" class="wh-event" value="vm_create">
+                            <span class="account-event-box">
+                                <span class="material-symbols-outlined">add_circle</span>
+                                VM Create
+                            </span>
                         </label>
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" class="wh-event" value="vm_delete" style="width: auto;"> VM Delete
+                        <label class="account-event-item">
+                            <input type="checkbox" class="wh-event" value="vm_delete">
+                            <span class="account-event-box">
+                                <span class="material-symbols-outlined">delete</span>
+                                VM Delete
+                            </span>
                         </label>
-                        <label class="d-flex align-center gap-2">
-                            <input type="checkbox" class="wh-event" value="alert_triggered" style="width: auto;"> Alert
+                        <label class="account-event-item">
+                            <input type="checkbox" class="wh-event" value="alert_triggered">
+                            <span class="account-event-box">
+                                <span class="material-symbols-outlined">notifications</span>
+                                Alert
+                            </span>
                         </label>
                     </div>
                 </div>
-                <div class="d-flex gap-2">
-                    <button id="btn-save-webhook" class="btn btn-success">Create Webhook</button>
+                <div class="account-form-actions">
                     <button id="btn-cancel-webhook" class="btn btn-secondary">Cancel</button>
+                    <button id="btn-save-webhook" class="btn btn-accent">Create Webhook</button>
                 </div>
             </div>
         </div>
@@ -1153,73 +1368,121 @@
     
     <!-- PREFERENCES TAB -->
     <template id="preferences-template">
-        <div class="card">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">tune</span>
-                Preferences
+        <div class="account-section-header">
+            <div class="account-section-info">
+                <h3>Preferences</h3>
+                <p>Customize your panel experience</p>
             </div>
-            <div class="card-body">
-                <div id="prefs-success" class="alert alert-success hidden mb-3">Preferences saved</div>
-                <div class="form-group">
+        </div>
+        
+        <div id="prefs-success" class="account-toast hidden">
+            <span class="material-symbols-outlined">check_circle</span>
+            Preferences saved
+        </div>
+        
+        <div class="account-prefs-grid">
+            <div class="account-pref-card">
+                <div class="account-pref-icon">
+                    <span class="material-symbols-outlined">palette</span>
+                </div>
+                <div class="account-pref-content">
                     <label>Theme</label>
-                    <select id="pref-theme" class="form-control" style="max-width: 200px;">
+                    <select id="pref-theme" class="form-control">
                         <option value="dark">Dark</option>
                         <option value="light">Light</option>
                         <option value="auto">Auto</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>Terminal Font Size</label>
-                    <input type="number" id="pref-font-size" class="form-control" style="max-width: 100px;" min="10" max="24" value="14">
+            </div>
+            
+            <div class="account-pref-card">
+                <div class="account-pref-icon">
+                    <span class="material-symbols-outlined">text_fields</span>
                 </div>
-                <div class="form-group">
+                <div class="account-pref-content">
+                    <label>Terminal Font Size</label>
+                    <input type="number" id="pref-font-size" class="form-control" min="10" max="24" value="14">
+                </div>
+            </div>
+            
+            <div class="account-pref-card">
+                <div class="account-pref-icon">
+                    <span class="material-symbols-outlined">tab</span>
+                </div>
+                <div class="account-pref-content">
                     <label>Default VM View</label>
-                    <select id="pref-default-view" class="form-control" style="max-width: 200px;">
+                    <select id="pref-default-view" class="form-control">
                         <option value="console">Console</option>
                         <option value="stats">Stats</option>
                         <option value="settings">Settings</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label class="d-flex align-center gap-2">
-                        <input type="checkbox" id="pref-notifications" style="width: auto;">
-                        Enable browser notifications
-                    </label>
+            </div>
+            
+            <div class="account-pref-card">
+                <div class="account-pref-icon">
+                    <span class="material-symbols-outlined">notifications</span>
                 </div>
-                <button id="btn-save-prefs" class="btn btn-accent">
-                    <span class="material-symbols-outlined icon-sm">save</span>
-                    Save Preferences
-                </button>
+                <div class="account-pref-content">
+                    <label>Browser Notifications</label>
+                    <div class="toggle-switch-row" style="margin-top: 0.5rem;">
+                        <span class="text-sm text-muted">Receive alerts in browser</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="pref-notifications">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
             </div>
         </div>
         
-        <div class="card mt-3">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm mr-2">security</span>
-                Security
+        <button id="btn-save-prefs" class="btn btn-accent mt-4">
+            <span class="material-symbols-outlined icon-sm">save</span>
+            Save Preferences
+        </button>
+        
+        <div class="account-section-header mt-5">
+            <div class="account-section-info">
+                <h3>Security</h3>
+                <p>Manage your account security</p>
             </div>
-            <div class="card-body">
-                <div id="security-success" class="alert alert-success hidden mb-3"></div>
-                <p class="text-sm text-muted mb-3">Logout from all devices and sessions. You will need to login again.</p>
-                <button id="btn-revoke-all-sessions" class="btn btn-danger">
-                    <span class="material-symbols-outlined icon-sm">logout</span>
-                    Logout All Sessions
-                </button>
+        </div>
+        
+        <div id="security-success" class="account-toast hidden">
+            <span class="material-symbols-outlined">check_circle</span>
+            <span id="security-message">Success</span>
+        </div>
+        
+        <div class="account-security-card">
+            <div class="account-security-icon danger">
+                <span class="material-symbols-outlined">logout</span>
             </div>
+            <div class="account-security-content">
+                <strong>Logout All Sessions</strong>
+                <p>Sign out from all devices and browsers. You will need to login again.</p>
+            </div>
+            <button id="btn-revoke-all-sessions" class="btn btn-danger">
+                Logout All
+            </button>
         </div>
     </template>
     
     <!-- USER ACTIVITY TAB -->
     <template id="activity-template">
-        <div class="card">
-            <div class="card-header">
-                <span class="material-symbols-outlined icon-sm" style="margin-right: 8px;">history</span>
-                Recent Activity
+        <div class="account-section-header">
+            <div class="account-section-info">
+                <h3>Recent Activity</h3>
+                <p>Your recent actions and events</p>
             </div>
-            <div class="card-body">
-                <div id="activity-list"></div>
-                <button id="btn-load-more-activity" class="btn btn-sm btn-secondary mt-3">Load More</button>
-            </div>
+        </div>
+        
+        <div id="activity-list" class="audit-timeline"></div>
+        
+        <div class="d-flex justify-center mt-4">
+            <button id="btn-load-more-activity" class="btn btn-sm btn-secondary">
+                <span class="material-symbols-outlined icon-sm">expand_more</span>
+                Load More
+            </button>
         </div>
     </template>
     
@@ -1426,6 +1689,7 @@
     <script src="/js/xterm-addon-fit.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/vnc-client.js"></script>
+    <script src="/js/charts.js"></script>
     <script src="/js/app.js"></script>
 </body>
 </html>

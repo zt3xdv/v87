@@ -451,29 +451,67 @@ const App = {
             container.innerHTML = '';
             container.appendChild(tmpl);
             
+            // Update stats cards
+            const runningCount = data.servers.filter(s => s.status === 'running').length;
+            const stoppedCount = data.servers.filter(s => s.status === 'stopped').length;
+            document.getElementById('dash-total-vms').textContent = data.servers.length;
+            document.getElementById('dash-running-vms').textContent = runningCount;
+            document.getElementById('dash-stopped-vms').textContent = stoppedCount;
+            document.getElementById('dash-ram-used').textContent = `${data.stats?.totalRam || 0} MB`;
+            
             const list = document.getElementById('server-list');
             if (data.servers.length != 0) list.innerHTML = "";
             data.servers.forEach(s => {
                 const item = document.createElement('div');
-                item.className = 'server-item';
+                item.className = 'vm-card';
                 item.onclick = () => App.navigate(`/server/${s.id}/console`);
                 
                 const statusClass = s.status === 'running' ? 'running' : (s.status === 'creating' ? 'creating' : 'stopped');
-                const statusText = s.status === 'running' ? 'RUNNING' : (s.status === 'creating' ? 'CREATING...' : 'STOPPED');
+                const statusText = s.status === 'running' ? 'Running' : (s.status === 'creating' ? 'Creating...' : 'Stopped');
                 
                 item.innerHTML = `
-                    <div>
-                        <h5 class="mb-0" style="font-size: 1.1rem;">${s.name}</h5>
-                        <small class="text-muted" style="display:block; margin-top:4px;">${s.image || 'Unknown'} • ${s.ram}MB RAM • ${s.diskSize}</small>
+                    <div class="vm-card-header">
+                        <div>
+                            <div class="vm-card-title">${s.name}</div>
+                            <div class="vm-card-subtitle">${s.image || 'Unknown OS'}</div>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <span class="status-indicator ${statusClass}"></span>
+                            <span class="badge ${statusClass}">${statusText}</span>
+                        </div>
                     </div>
-                    <div style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
-                         <span class="badge ${statusClass}">${statusText}</span>
-                         <button class="btn btn-sm btn-danger del-btn" onclick="event.stopPropagation()">Delete</button>
+                    <div class="vm-card-stats">
+                        <div class="vm-card-stat">
+                            <span class="material-symbols-outlined">memory</span>
+                            ${s.ram || 0} MB
+                        </div>
+                        <div class="vm-card-stat">
+                            <span class="material-symbols-outlined">storage</span>
+                            ${s.diskSize || '0G'}
+                        </div>
+                        <div class="vm-card-stat">
+                            <span class="material-symbols-outlined">developer_board</span>
+                            ${s.cpuLimit || 100}% CPU
+                        </div>
+                    </div>
+                    <div class="vm-card-actions">
+                        <button class="btn btn-xs btn-secondary view-btn" onclick="event.stopPropagation()">
+                            <span class="material-symbols-outlined icon-xs">open_in_new</span>
+                            Open
+                        </button>
+                        <button class="btn btn-xs btn-danger del-btn" onclick="event.stopPropagation()">
+                            <span class="material-symbols-outlined icon-xs">delete</span>
+                        </button>
                     </div>
                 `;
+                item.querySelector('.view-btn').onclick = (e) => {
+                    e.stopPropagation();
+                    App.navigate(`/server/${s.id}/console`);
+                };
                 item.querySelector('.del-btn').onclick = async (e) => {
                     e.stopPropagation();
-                    if(!confirm(`Delete VM ${s.name}? This will delete all data!`)) return;
+                    const confirmed = await Dialog.confirm(`Delete VM "${s.name}"? This will permanently delete all data!`, 'Delete VM', { danger: true, confirmText: 'Delete' });
+                    if (!confirmed) return;
                     await fetch(`/api/server/${s.id}`, {
                         method: 'DELETE',
                         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -810,11 +848,118 @@ const App = {
             const mins = Math.floor((seconds % 3600) / 60);
             const secs = seconds % 60;
             
-            if (days > 0) return `${days}d ${hours}h ${mins}m`;
-            if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
+            if (days > 0) return `${days}d ${hours}h`;
+            if (hours > 0) return `${hours}h ${mins}m`;
             if (mins > 0) return `${mins}m ${secs}s`;
             return `${secs}s`;
         };
+        
+        // Initialize Chart.js charts
+        let cpuChart = null;
+        let memoryChart = null;
+        let diskChart = null;
+        const maxDataPoints = 30;
+        const cpuHistory = Array(maxDataPoints).fill(0);
+        const memoryHistory = Array(maxDataPoints).fill(0);
+        
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#18181b',
+                    titleColor: '#fafafa',
+                    bodyColor: '#a1a1aa',
+                    borderColor: '#27272a',
+                    borderWidth: 1,
+                    padding: 10,
+                    cornerRadius: 6
+                }
+            },
+            scales: {
+                x: { display: false },
+                y: {
+                    min: 0,
+                    max: 100,
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: { color: '#52525b', font: { size: 10 }, callback: v => v + '%' }
+                }
+            },
+            elements: {
+                line: { tension: 0.4, borderWidth: 2 },
+                point: { radius: 0, hoverRadius: 4 }
+            }
+        };
+        
+        if (typeof Chart !== 'undefined') {
+            const cpuCtx = document.getElementById('cpu-chart');
+            const memCtx = document.getElementById('memory-chart');
+            const diskCtx = document.getElementById('disk-chart');
+            
+            if (cpuCtx) {
+                cpuChart = new Chart(cpuCtx, {
+                    type: 'line',
+                    data: {
+                        labels: Array(maxDataPoints).fill(''),
+                        datasets: [{
+                            data: cpuHistory,
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            fill: true
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+            
+            if (memCtx) {
+                memoryChart = new Chart(memCtx, {
+                    type: 'line',
+                    data: {
+                        labels: Array(maxDataPoints).fill(''),
+                        datasets: [{
+                            data: memoryHistory,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            fill: true
+                        }]
+                    },
+                    options: chartOptions
+                });
+            }
+            
+            if (diskCtx) {
+                diskChart = new Chart(diskCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Used', 'Free'],
+                        datasets: [{
+                            data: [0, 100],
+                            backgroundColor: ['#7c3aed', '#27272a'],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '70%',
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: '#18181b',
+                                bodyColor: '#a1a1aa',
+                                padding: 8,
+                                cornerRadius: 4,
+                                callbacks: {
+                                    label: ctx => `${ctx.label}: ${ctx.raw}%`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
         
         const updateStats = async () => {
             try {
@@ -833,15 +978,19 @@ const App = {
                 document.getElementById('stats-content').style.opacity = '1';
                 
                 document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime || 0);
-                document.getElementById('stat-cpu').textContent = stats.cpuUsage !== undefined ? `${stats.cpuUsage}%` : '-';
+                
+                const cpuUsage = stats.cpuUsage !== undefined ? stats.cpuUsage : 0;
+                document.getElementById('stat-cpu').textContent = `${cpuUsage}%`;
                 
                 if (stats.cpu) {
                     const active = stats.cpu.cpus.filter(c => !c.halted).length;
-                    document.getElementById('stat-cpu-cores').textContent = `${active}/${stats.cpu.count} cores active`;
+                    document.getElementById('stat-cpu-cores').textContent = `${active}/${stats.cpu.count} cores`;
                 }
                 
+                let memUsagePercent = 0;
                 if (stats.memory) {
-                    document.getElementById('stat-memory').textContent = `${stats.memory.actual} / ${stats.memory.configured} MB`;
+                    document.getElementById('stat-memory').textContent = `${stats.memory.actual}/${stats.memory.configured} MB`;
+                    memUsagePercent = Math.round((stats.memory.actual / stats.memory.configured) * 100);
                 } else {
                     document.getElementById('stat-memory').textContent = `${stats.configuredRam || '-'} MB`;
                 }
@@ -855,7 +1004,31 @@ const App = {
                 }
                 
                 document.getElementById('stat-pid').textContent = stats.pid || '-';
-                document.getElementById('stat-started').textContent = stats.startedAt ? new Date(stats.startedAt).toLocaleString() : '-';
+                const startedEl = document.getElementById('stat-started');
+                if (startedEl) {
+                    startedEl.textContent = stats.startedAt ? new Date(stats.startedAt).toLocaleTimeString() : '-';
+                }
+                
+                // Update charts
+                if (cpuChart) {
+                    cpuHistory.shift();
+                    cpuHistory.push(cpuUsage);
+                    cpuChart.data.datasets[0].data = cpuHistory;
+                    cpuChart.update('none');
+                }
+                
+                if (memoryChart) {
+                    memoryHistory.shift();
+                    memoryHistory.push(memUsagePercent);
+                    memoryChart.data.datasets[0].data = memoryHistory;
+                    memoryChart.update('none');
+                }
+                
+                if (diskChart && stats.diskUsage) {
+                    const used = stats.diskUsage.usedPercent || 30;
+                    diskChart.data.datasets[0].data = [used, 100 - used];
+                    diskChart.update();
+                }
                 
             } catch (e) {
                 console.error('Failed to fetch stats:', e);
@@ -1317,7 +1490,7 @@ const App = {
         tabs.forEach(t => {
             const btn = document.getElementById(`tab-${t}`);
             if (btn) {
-                btn.className = `tab-btn ${t === tab ? 'active' : ''}`;
+                btn.className = `admin-pill ${t === tab ? 'active' : ''}`;
                 btn.onclick = () => App.navigate(`/admin/${t}`);
             }
         });
@@ -1348,41 +1521,66 @@ const App = {
         let searchQuery = '';
         
         const loadServers = async () => {
-            const tbody = document.getElementById('admin-servers-list');
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center">Loading...</td></tr>';
+            const listEl = document.getElementById('admin-servers-list');
+            listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">hourglass_empty</span>Loading...</div>';
             
             try {
-                const r = await fetch(`/api/admin/servers?page=${currentPage}&limit=10&search=${encodeURIComponent(searchQuery)}`, {
+                const r = await fetch(`/api/admin/servers?page=${currentPage}&limit=12&search=${encodeURIComponent(searchQuery)}`, {
                     headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                 });
                 const data = await r.json();
                 
-                tbody.innerHTML = '';
+                document.getElementById('admin-servers-count').textContent = `${data.total} VMs`;
+                
+                listEl.innerHTML = '';
                 data.servers.forEach(s => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td>${s.name}</td>
-                        <td>${s.ownerName}</td>
-                        <td>${s.imageName}</td>
-                        <td><span class="badge ${s.status === 'running' ? 'running' : 'stopped'}">${s.status.toUpperCase()}</span></td>
-                        <td style="text-align:right">
-                            <button class="btn btn-sm btn-secondary edit-btn">Edit</button>
-                        </td>
+                    const card = document.createElement('div');
+                    card.className = 'admin-card';
+                    card.innerHTML = `
+                        <div class="admin-card-header">
+                            <div class="admin-card-status ${s.status === 'running' ? 'status-running' : 'status-stopped'}"></div>
+                            <span class="admin-card-title">${s.name}</span>
+                        </div>
+                        <div class="admin-card-body">
+                            <div class="admin-card-info">
+                                <span class="material-symbols-outlined">person</span>
+                                <span>${s.ownerName}</span>
+                            </div>
+                            <div class="admin-card-info">
+                                <span class="material-symbols-outlined">deployed_code</span>
+                                <span>${s.imageName}</span>
+                            </div>
+                        </div>
+                        <div class="admin-card-footer">
+                            <span class="badge ${s.status === 'running' ? 'running' : 'stopped'}">${s.status.toUpperCase()}</span>
+                            <button class="btn btn-sm btn-secondary edit-btn">
+                                <span class="material-symbols-outlined icon-sm">edit</span>
+                            </button>
+                        </div>
                     `;
-                    tr.querySelector('.edit-btn').onclick = () => App.openServerEditModal(s, loadServers);
-                    tbody.appendChild(tr);
+                    card.querySelector('.edit-btn').onclick = () => App.openServerEditModal(s, loadServers);
+                    listEl.appendChild(card);
                 });
                 
                 if (data.servers.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No servers found</td></tr>';
+                    listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">dns</span>No VMs found</div>';
                 }
                 
-                document.getElementById('admin-servers-pagination').innerHTML = `
-                    Page ${data.page} of ${data.totalPages} (${data.total} total)
+                const paginationEl = document.getElementById('admin-servers-pagination');
+                paginationEl.innerHTML = `
+                    <button class="btn btn-sm btn-secondary" id="admin-servers-prev" ${currentPage <= 1 ? 'disabled' : ''}>
+                        <span class="material-symbols-outlined icon-sm">chevron_left</span>
+                    </button>
+                    <span class="admin-pagination-info">Page ${data.page} of ${data.totalPages}</span>
+                    <button class="btn btn-sm btn-secondary" id="admin-servers-next" ${currentPage >= data.totalPages ? 'disabled' : ''}>
+                        <span class="material-symbols-outlined icon-sm">chevron_right</span>
+                    </button>
                 `;
+                document.getElementById('admin-servers-prev').onclick = () => { currentPage--; loadServers(); };
+                document.getElementById('admin-servers-next').onclick = () => { currentPage++; loadServers(); };
             } catch (e) {
                 console.error(e);
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading servers</td></tr>';
+                listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">error</span>Error loading servers</div>';
             }
         };
         
@@ -1400,35 +1598,76 @@ const App = {
         container.innerHTML = '';
         container.appendChild(tmpl);
         
+        let searchQuery = '';
+        let allUsers = [];
+        
+        const renderUsers = () => {
+            const listEl = document.getElementById('admin-users-list');
+            const filtered = searchQuery 
+                ? allUsers.filter(u => u.username.toLowerCase().includes(searchQuery.toLowerCase()))
+                : allUsers;
+            
+            document.getElementById('admin-users-count').textContent = `${filtered.length} users`;
+            
+            listEl.innerHTML = '';
+            filtered.forEach(u => {
+                const card = document.createElement('div');
+                card.className = 'admin-card admin-user-card';
+                card.innerHTML = `
+                    <div class="admin-card-header">
+                        <div class="admin-user-avatar ${u.role === 'admin' ? 'avatar-admin' : ''}">
+                            <span class="material-symbols-outlined">${u.role === 'admin' ? 'shield_person' : 'person'}</span>
+                        </div>
+                        <div class="admin-user-info">
+                            <span class="admin-card-title">${u.username}</span>
+                            <span class="badge ${u.role === 'admin' ? 'running' : 'stopped'}">${u.role.toUpperCase()}</span>
+                        </div>
+                    </div>
+                    <div class="admin-card-body">
+                        <div class="admin-card-stat">
+                            <span class="material-symbols-outlined">computer</span>
+                            <span>${u.serverCount} VMs</span>
+                        </div>
+                        <div class="admin-card-stat">
+                            <span class="material-symbols-outlined">${u.suspended ? 'block' : 'check_circle'}</span>
+                            <span class="${u.suspended ? 'text-danger' : 'text-success'}">${u.suspended ? 'Suspended' : 'Active'}</span>
+                        </div>
+                    </div>
+                    <div class="admin-card-footer">
+                        <button class="btn btn-sm btn-secondary edit-btn">
+                            <span class="material-symbols-outlined icon-sm">edit</span>
+                            Edit
+                        </button>
+                    </div>
+                `;
+                card.querySelector('.edit-btn').onclick = () => App.openUserEditModal(u.id, loadUsers);
+                listEl.appendChild(card);
+            });
+            
+            if (filtered.length === 0) {
+                listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">group</span>No users found</div>';
+            }
+        };
+        
         const loadUsers = async () => {
-            const tbody = document.getElementById('admin-users-list');
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center">Loading...</td></tr>';
+            const listEl = document.getElementById('admin-users-list');
+            listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">hourglass_empty</span>Loading...</div>';
             
             try {
                 const r = await fetch('/api/admin/users', {
                     headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                 });
-                const users = await r.json();
-                
-                tbody.innerHTML = '';
-                users.forEach(u => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td>${u.username}</td>
-                        <td><span class="badge ${u.role === 'admin' ? 'running' : 'stopped'}">${u.role.toUpperCase()}</span></td>
-                        <td>${u.serverCount}</td>
-                        <td>${u.suspended ? '<span class="badge suspended">SUSPENDED</span>' : '<span class="badge running">ACTIVE</span>'}</td>
-                        <td style="text-align:right">
-                            <button class="btn btn-sm btn-secondary edit-btn">Edit</button>
-                        </td>
-                    `;
-                    tr.querySelector('.edit-btn').onclick = () => App.openUserEditModal(u.id, loadUsers);
-                    tbody.appendChild(tr);
-                });
+                allUsers = await r.json();
+                renderUsers();
             } catch (e) {
                 console.error(e);
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger">Error loading users</td></tr>';
+                listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">error</span>Error loading users</div>';
             }
+        };
+        
+        document.getElementById('admin-user-search').oninput = (e) => {
+            searchQuery = e.target.value;
+            renderUsers();
         };
         
         loadUsers();
@@ -1436,33 +1675,18 @@ const App = {
     
     renderAdminNodes: async (container) => {
         container.innerHTML = `
-            <div class="admin-section">
-                <div class="section-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-                    <h3>Nodes</h3>
-                    <button id="btn-add-node" class="btn btn-primary btn-sm">
-                        <span class="material-symbols-outlined icon-sm">add</span> Add Node
-                    </button>
-                </div>
-                <table class="admin-table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Region</th>
-                            <th>Status</th>
-                            <th>RAM</th>
-                            <th>Disk</th>
-                            <th>Servers</th>
-                            <th style="text-align:right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="admin-nodes-list"></tbody>
-                </table>
+            <div class="admin-section-header">
+                <span class="admin-count" id="admin-nodes-count">0 nodes</span>
+                <button id="btn-add-node" class="btn btn-sm btn-accent">
+                    <span class="material-symbols-outlined icon-sm">add</span> Add Node
+                </button>
             </div>
+            <div id="admin-nodes-list" class="admin-cards-grid"></div>
         `;
         
         const loadNodes = async () => {
-            const tbody = document.getElementById('admin-nodes-list');
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center">Loading...</td></tr>';
+            const listEl = document.getElementById('admin-nodes-list');
+            listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">hourglass_empty</span>Loading...</div>';
             
             try {
                 const r = await fetch('/api/admin/nodes', {
@@ -1470,53 +1694,85 @@ const App = {
                 });
                 const data = await r.json();
                 
-                tbody.innerHTML = '';
-                if (data.nodes.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No nodes configured</td></tr>';
+                document.getElementById('admin-nodes-count').textContent = `${data.nodes?.length || 0} nodes`;
+                
+                listEl.innerHTML = '';
+                if (!data.nodes || data.nodes.length === 0) {
+                    listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">dns</span>No nodes configured</div>';
                     return;
                 }
                 
                 data.nodes.forEach(n => {
                     const ramUsed = n.availability?.ram?.used || 0;
-                    const ramTotal = n.maxRam || 0;
+                    const ramTotal = n.maxRam || 1;
                     const diskUsed = n.availability?.disk?.used || 0;
-                    const diskTotal = n.maxDisk || 0;
+                    const diskTotal = n.maxDisk || 1;
                     const srvCount = n.availability?.servers?.count || 0;
-                    const srvMax = n.maxServers || 0;
+                    const srvMax = n.maxServers || 1;
                     
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td><strong>${n.name}</strong></td>
-                        <td>${n.region || 'default'}</td>
-                        <td>
-                            <span class="badge ${n.online ? 'running' : 'stopped'}">
-                                ${n.online ? 'ONLINE' : 'OFFLINE'}
-                            </span>
-                            ${!n.enabled ? '<span class="badge suspended">DISABLED</span>' : ''}
-                        </td>
-                        <td>${ramUsed}MB / ${ramTotal}MB</td>
-                        <td>${diskUsed}GB / ${diskTotal}GB</td>
-                        <td>${srvCount} / ${srvMax}</td>
-                        <td style="text-align:right">
-                            <button class="btn btn-sm btn-secondary edit-btn">Edit</button>
-                            <button class="btn btn-sm btn-secondary reconnect-btn" title="Reconnect">
-                                <span class="material-symbols-outlined icon-sm">refresh</span>
+                    const ramPercent = Math.min(100, Math.round((ramUsed / ramTotal) * 100));
+                    const diskPercent = Math.min(100, Math.round((diskUsed / diskTotal) * 100));
+                    const srvPercent = Math.min(100, Math.round((srvCount / srvMax) * 100));
+                    
+                    const card = document.createElement('div');
+                    card.className = `admin-node-card ${!n.online ? 'offline' : ''}`;
+                    card.innerHTML = `
+                        <div class="admin-node-header">
+                            <div>
+                                <div class="admin-node-name">${n.name}</div>
+                                <div class="admin-node-region">${n.region || 'default'}</div>
+                            </div>
+                            <div class="d-flex gap-1 align-center">
+                                <span class="status-indicator ${n.online ? 'running' : 'stopped'}"></span>
+                                <span class="badge ${n.online ? 'running' : 'stopped'}">${n.online ? 'Online' : 'Offline'}</span>
+                                ${!n.enabled ? '<span class="badge suspended">Disabled</span>' : ''}
+                            </div>
+                        </div>
+                        <div class="admin-node-resources">
+                            <div class="admin-node-resource">
+                                <span class="admin-node-resource-label">RAM</span>
+                                <div class="admin-node-resource-bar">
+                                    <div class="admin-node-resource-fill" style="width: ${ramPercent}%; background: linear-gradient(90deg, #7c3aed, #a78bfa);"></div>
+                                </div>
+                                <span class="admin-node-resource-value">${ramUsed}/${ramTotal} MB</span>
+                            </div>
+                            <div class="admin-node-resource">
+                                <span class="admin-node-resource-label">Disk</span>
+                                <div class="admin-node-resource-bar">
+                                    <div class="admin-node-resource-fill" style="width: ${diskPercent}%; background: linear-gradient(90deg, #10b981, #34d399);"></div>
+                                </div>
+                                <span class="admin-node-resource-value">${diskUsed}/${diskTotal} GB</span>
+                            </div>
+                            <div class="admin-node-resource">
+                                <span class="admin-node-resource-label">VMs</span>
+                                <div class="admin-node-resource-bar">
+                                    <div class="admin-node-resource-fill" style="width: ${srvPercent}%; background: linear-gradient(90deg, #f59e0b, #fbbf24);"></div>
+                                </div>
+                                <span class="admin-node-resource-value">${srvCount}/${srvMax}</span>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-2 mt-3">
+                            <button class="btn btn-xs btn-secondary edit-btn flex-1">
+                                <span class="material-symbols-outlined icon-xs">edit</span> Edit
                             </button>
-                        </td>
+                            <button class="btn btn-xs btn-secondary reconnect-btn" title="Reconnect">
+                                <span class="material-symbols-outlined icon-xs">refresh</span>
+                            </button>
+                        </div>
                     `;
-                    tr.querySelector('.edit-btn').onclick = () => App.openNodeEditModal(n.id, loadNodes);
-                    tr.querySelector('.reconnect-btn').onclick = async () => {
+                    card.querySelector('.edit-btn').onclick = () => App.openNodeEditModal(n.id, loadNodes);
+                    card.querySelector('.reconnect-btn').onclick = async () => {
                         await fetch(`/api/admin/nodes/${n.id}/reconnect`, {
                             method: 'POST',
                             headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
                         });
                         setTimeout(loadNodes, 1000);
                     };
-                    tbody.appendChild(tr);
+                    listEl.appendChild(card);
                 });
             } catch (e) {
                 console.error(e);
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">Error loading nodes</td></tr>';
+                listEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">error</span>Error loading nodes</div>';
             }
         };
         
@@ -1800,27 +2056,64 @@ const App = {
         container.appendChild(tmpl);
         
         let offset = 0;
-        const limit = 50;
+        const limit = 30;
+        
+        const getActionIcon = (action) => {
+            const icons = {
+                login: 'login',
+                register: 'person_add',
+                vm_create: 'add_circle',
+                vm_delete: 'delete',
+                vm_start: 'play_circle',
+                vm_stop: 'stop_circle'
+            };
+            return icons[action] || 'info';
+        };
+        
+        const getActionLabel = (action) => {
+            const labels = {
+                login: 'User Login',
+                register: 'New Registration',
+                vm_create: 'VM Created',
+                vm_delete: 'VM Deleted',
+                vm_start: 'VM Started',
+                vm_stop: 'VM Stopped'
+            };
+            return labels[action] || action;
+        };
         
         const loadLogs = async () => {
             const action = document.getElementById('audit-filter-action').value;
             const params = new URLSearchParams({ limit, offset });
             if (action) params.append('action', action);
             
+            const timelineEl = document.getElementById('audit-logs-list');
+            timelineEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">hourglass_empty</span>Loading...</div>';
+            
             const res = await fetch(`/api/admin/audit?${params}`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
             });
             const logs = await res.json();
             
-            const tbody = document.getElementById('audit-logs-list');
-            tbody.innerHTML = logs.map(log => `
-                <tr>
-                    <td class="text-sm">${new Date(log.timestamp).toLocaleString()}</td>
-                    <td>${log.username || '-'}</td>
-                    <td><span class="badge">${log.action}</span></td>
-                    <td class="text-sm text-muted">${log.serverId ? `VM: ${log.serverId}` : ''} ${log.serverName || ''}</td>
-                </tr>
-            `).join('') || '<tr><td colspan="4" class="text-muted">No logs found</td></tr>';
+            if (logs.length === 0) {
+                timelineEl.innerHTML = '<div class="admin-empty-state"><span class="material-symbols-outlined">history</span>No audit logs found</div>';
+            } else {
+                timelineEl.innerHTML = logs.map(log => `
+                    <div class="audit-item">
+                        <div class="audit-icon ${log.action}">
+                            <span class="material-symbols-outlined">${getActionIcon(log.action)}</span>
+                        </div>
+                        <div class="audit-content">
+                            <div class="audit-header">
+                                <span class="audit-action">${getActionLabel(log.action)}</span>
+                                <span class="audit-time">${new Date(log.timestamp).toLocaleString()}</span>
+                            </div>
+                            <div class="audit-user">by ${log.username || 'Unknown'}</div>
+                            ${log.serverName ? `<div class="audit-details">VM: ${log.serverName}</div>` : ''}
+                        </div>
+                    </div>
+                `).join('');
+            }
             
             document.getElementById('btn-audit-prev').disabled = offset === 0;
             document.getElementById('btn-audit-next').disabled = logs.length < limit;
@@ -2006,10 +2299,14 @@ const App = {
         container.innerHTML = '';
         container.appendChild(tmpl);
         
+        // Set user info in hero
+        document.getElementById('account-username').textContent = App.user?.username || 'User';
+        document.getElementById('account-role').textContent = App.user?.role === 'admin' ? 'Administrator' : 'Member';
+        
         const tabs = ['apikeys', 'webhooks', 'prefs', 'activity'];
         tabs.forEach(t => {
             const btn = document.getElementById(`tab-${t}`);
-            btn.className = `tab-btn ${t === tab ? 'active' : ''}`;
+            btn.className = `account-pill ${t === tab ? 'active' : ''}`;
             btn.onclick = () => App.navigate(`/account/${t}`);
         });
         
@@ -2035,18 +2332,23 @@ const App = {
             
             if (data.keys && data.keys.length > 0) {
                 list.innerHTML = data.keys.map(k => `
-                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
-                        <div>
-                            <strong>${k.name}</strong>
-                            <code class="text-sm ml-2">${k.prefix}</code>
-                            <div class="text-sm text-muted">
-                                Permissions: ${k.permissions.join(', ')}
-                                ${k.lastUsed ? ` • Last used: ${new Date(k.lastUsed).toLocaleDateString()}` : ''}
+                    <div class="account-item">
+                        <div class="account-item-icon">
+                            <span class="material-symbols-outlined">key</span>
+                        </div>
+                        <div class="account-item-content">
+                            <div class="account-item-name">${k.name}</div>
+                            <div class="account-item-meta">
+                                <code>${k.prefix}</code>
+                                <span>${k.permissions.join(', ')}</span>
+                                ${k.lastUsed ? `<span>Last used: ${new Date(k.lastUsed).toLocaleDateString()}</span>` : ''}
                             </div>
                         </div>
-                        <button class="btn btn-sm btn-danger btn-delete-key" data-id="${k.id}">
-                            <span class="material-symbols-outlined icon-sm">delete</span>
-                        </button>
+                        <div class="account-item-actions">
+                            <button class="btn btn-sm btn-danger btn-delete-key" data-id="${k.id}">
+                                <span class="material-symbols-outlined icon-sm">delete</span>
+                            </button>
+                        </div>
                     </div>
                 `).join('');
                 
@@ -2062,7 +2364,7 @@ const App = {
                     };
                 });
             } else {
-                list.innerHTML = '<div class="text-muted">No API keys yet</div>';
+                list.innerHTML = '<div class="account-empty-state"><span class="material-symbols-outlined">key_off</span><p>No API keys yet</p></div>';
             }
         };
         
@@ -2113,15 +2415,22 @@ const App = {
             
             if (data.webhooks && data.webhooks.length > 0) {
                 list.innerHTML = data.webhooks.map(w => `
-                    <div class="d-flex justify-between align-center" style="padding: 0.75rem; background: var(--bg-app); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
-                        <div>
-                            <strong>${w.name}</strong>
-                            <span class="badge ml-2 ${w.enabled ? '' : 'suspended'}">${w.enabled ? 'ACTIVE' : 'DISABLED'}</span>
-                            <div class="text-sm text-muted">${w.url}</div>
-                            <div class="text-sm">${w.events.map(e => `<span class="badge" style="font-size: 0.7rem;">${e}</span>`).join(' ')}</div>
+                    <div class="account-item">
+                        <div class="account-item-icon webhook">
+                            <span class="material-symbols-outlined">webhook</span>
                         </div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-secondary btn-test-wh" data-id="${w.id}">
+                        <div class="account-item-content">
+                            <div class="account-item-name">
+                                ${w.name}
+                                <span class="badge ml-2 ${w.enabled ? 'running' : 'stopped'}">${w.enabled ? 'Active' : 'Disabled'}</span>
+                            </div>
+                            <div class="account-item-meta">
+                                <span style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${w.url}</span>
+                            </div>
+                            <div class="d-flex gap-1 mt-1 flex-wrap">${w.events.map(e => `<span class="badge" style="font-size: 0.65rem;">${e}</span>`).join('')}</div>
+                        </div>
+                        <div class="account-item-actions">
+                            <button class="btn btn-sm btn-secondary btn-test-wh" data-id="${w.id}" title="Test">
                                 <span class="material-symbols-outlined icon-sm">send</span>
                             </button>
                             <button class="btn btn-sm btn-danger btn-delete-wh" data-id="${w.id}">
@@ -2165,7 +2474,7 @@ const App = {
                     };
                 });
             } else {
-                list.innerHTML = '<div class="text-muted">No webhooks yet</div>';
+                list.innerHTML = '<div class="account-empty-state"><span class="material-symbols-outlined">webhook</span><p>No webhooks yet</p></div>';
             }
         };
         
@@ -2271,6 +2580,28 @@ const App = {
         let offset = 0;
         const limit = 20;
         
+        const getActionIcon = (action) => {
+            const icons = {
+                login: 'login',
+                vm_create: 'add_circle',
+                vm_delete: 'delete',
+                vm_start: 'play_circle',
+                vm_stop: 'stop_circle'
+            };
+            return icons[action] || 'info';
+        };
+        
+        const getActionLabel = (action) => {
+            const labels = {
+                login: 'Logged in',
+                vm_create: 'Created VM',
+                vm_delete: 'Deleted VM',
+                vm_start: 'Started VM',
+                vm_stop: 'Stopped VM'
+            };
+            return labels[action] || action;
+        };
+        
         const loadActivity = async (append = false) => {
             const res = await fetch(`/api/activity?limit=${limit}&offset=${offset}`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -2279,20 +2610,27 @@ const App = {
             const list = document.getElementById('activity-list');
             
             const html = logs.map(log => `
-                <div style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
-                    <span class="badge">${log.action}</span>
-                    <span class="text-sm text-muted ml-2">${new Date(log.timestamp).toLocaleString()}</span>
-                    ${log.serverName ? `<span class="text-sm ml-2">${log.serverName}</span>` : ''}
+                <div class="audit-item">
+                    <div class="audit-icon ${log.action}">
+                        <span class="material-symbols-outlined">${getActionIcon(log.action)}</span>
+                    </div>
+                    <div class="audit-content">
+                        <div class="audit-header">
+                            <span class="audit-action">${getActionLabel(log.action)}</span>
+                            <span class="audit-time">${new Date(log.timestamp).toLocaleString()}</span>
+                        </div>
+                        ${log.serverName ? `<div class="audit-details">VM: ${log.serverName}</div>` : ''}
+                    </div>
                 </div>
             `).join('');
             
             if (append) {
                 list.innerHTML += html;
             } else {
-                list.innerHTML = html || '<div class="text-muted">No activity yet</div>';
+                list.innerHTML = html || '<div class="account-empty-state"><span class="material-symbols-outlined">history</span><p>No activity yet</p></div>';
             }
             
-            document.getElementById('btn-load-more-activity').style.display = logs.length < limit ? 'none' : 'inline-block';
+            document.getElementById('btn-load-more-activity').style.display = logs.length < limit ? 'none' : 'flex';
         };
         
         await loadActivity();
