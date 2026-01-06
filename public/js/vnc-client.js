@@ -146,9 +146,21 @@ class VNCClient {
         });
         
         this.socket.on('vnc-data', (data) => {
-            const bytes = data instanceof ArrayBuffer 
-                ? new Uint8Array(data) 
-                : (Array.isArray(data) ? new Uint8Array(data) : new Uint8Array(data));
+            let bytes;
+            if (data instanceof ArrayBuffer) {
+                bytes = new Uint8Array(data);
+            } else if (data instanceof Uint8Array) {
+                bytes = data;
+            } else if (data && data.type === 'Buffer' && Array.isArray(data.data)) {
+                bytes = new Uint8Array(data.data);
+            } else if (Array.isArray(data)) {
+                bytes = new Uint8Array(data);
+            } else if (typeof data === 'object' && data !== null) {
+                bytes = new Uint8Array(Object.values(data));
+            } else {
+                console.error('VNC: Unknown data format', typeof data, data);
+                return;
+            }
             this.handleData(bytes);
         });
         
@@ -301,18 +313,11 @@ class VNCClient {
         this.send(setPixelFormat);
         
         // Request encodings (priority order: most efficient first)
-        // Encodings: CopyRect(1), ZRLE(16), Hextile(5), RRE(2), Raw(0)
-        // Pseudo-encodings: Cursor(-239), DesktopSize(-223), Compression(-247 to -256), Quality(-23 to -32)
+        // Keep it simple: CopyRect + Hextile + Raw
         const encodings = [
             1,     // CopyRect - copies existing screen areas (very efficient)
-            16,    // ZRLE - best compression
-            5,     // Hextile - good compression
-            2,     // RRE - simple compression  
+            5,     // Hextile - good compression, widely supported
             0,     // Raw - fallback
-            -223,  // DesktopSize pseudo-encoding
-            -239,  // Cursor pseudo-encoding
-            -247 + (9 - this.compressionLevel), // Compression level (9 = max)
-            -32 + this.qualityLevel,  // Quality level for JPEG
         ];
         
         const setEncodings = new Uint8Array(4 + encodings.length * 4);
@@ -419,8 +424,9 @@ class VNCClient {
                     consumed = this.handleCursorPseudo(w, h, offset);
                     break;
                 default:
-                    // Unknown encoding, try raw fallback
-                    consumed = this.handleRawRect(x, y, w, h, offset);
+                    // Unknown encoding - skip (QEMU shouldn't send unsupported encodings)
+                    console.warn('VNC: Unknown encoding', encoding, 'at rect', i);
+                    consumed = 0;
             }
             
             if (consumed === -1) return 0; // Need more data
@@ -452,8 +458,9 @@ class VNCClient {
     }
     
     readInt32(offset) {
-        return (this.buffer[offset] << 24) | (this.buffer[offset + 1] << 16) | 
+        const val = (this.buffer[offset] << 24) | (this.buffer[offset + 1] << 16) | 
                (this.buffer[offset + 2] << 8) | this.buffer[offset + 3];
+        return val | 0; // Ensure signed 32-bit
     }
     
     handleRawRect(x, y, w, h, offset) {
