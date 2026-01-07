@@ -1,6 +1,4 @@
-#!/usr/bin/env node
-
-import { NodeDaemon } from '../src/index.js';
+import { NodeDaemon } from './daemon.js';
 
 const args = process.argv.slice(2);
 
@@ -44,9 +42,6 @@ function parseArgs(args) {
             case '--help':
                 printHelp();
                 process.exit(0);
-            case '--version':
-                console.log('v87-node v1.0.0');
-                process.exit(0);
         }
     }
 
@@ -55,9 +50,9 @@ function parseArgs(args) {
 
 function printHelp() {
     console.log(`
-v87-node - V87 Node Daemon
+V87 Node Daemon
 
-Usage: v87-node [options]
+Usage: npm run start:node -- [options]
 
 Options:
   -p, --port <port>     Port to listen on (default: 7000)
@@ -69,9 +64,9 @@ Options:
   --version             Show version
 
 Examples:
-  v87-node -p 7000 -s mysecretkey
-  v87-node --port 7000 --secret mysecret --kvm
-  v87-node -p 7000 -s secret -d /var/lib/v87
+  npm run start:node -- -p 7000 -s mysecretkey
+  npm run start:node -- --port 7000 --secret mysecret --kvm
+  npm run start:node -- -p 7000 -s secret -d /var/lib/v87
 `);
 }
 
@@ -79,7 +74,7 @@ const config = parseArgs(args);
 
 if (!config.secret) {
     console.error('Error: --secret is required');
-    console.error('Run v87-node --help for usage');
+    console.error('Run npm run start:node -- --help for usage');
     process.exit(1);
 }
 
