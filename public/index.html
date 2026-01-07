@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#09090b">
     <title>v87 Panel</title>
+    <link rel="icon" type="image/svg+xml" href="/logo.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -16,7 +17,9 @@
 <body>
     <nav class="navbar">
         <div class="container-fluid d-flex justify-between align-center">
-            <a href="/" class="navbar-brand" onclick="event.preventDefault(); App.navigate('/dashboard')">v87</a>
+            <a href="/" class="navbar-brand" onclick="event.preventDefault(); App.navigate('/dashboard')">
+                <img src="/logo.svg" alt="V87" style="height: 28px; width: 28px;">
+            </a>
             
             <div class="dropdown" style="position: relative;">
                 <button class="btn btn-sm btn-secondary" id="nav-toggle">
