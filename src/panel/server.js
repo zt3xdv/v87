@@ -17,9 +17,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { generateToken, verifyToken } from './utils/token.js';
 import { requireAuth, requireAdmin, invalidateUserTokens } from './utils/authMiddleware.js';
-import { SandboxManager } from '../sandbox/sandbox-manager.js';
-import { getImages, getImage } from '../sandbox/images.js';
 import { NodeManager } from './utils/node-client.js';
+import { getImages, getImage } from './utils/images.js';
 
 const TERM_GRAY = "\x1b[90m";
 const TERM_RESET = "\x1b[0m";
@@ -79,14 +78,6 @@ try {
 if (config.secretKey === 'v87-change-me-in-prod') {
     log('\x1b[33mWARNING: Using default secretKey! Change it in config.json for production.\x1b[0m');
 }
-
-const sandboxManager = new SandboxManager({
-    maxMemoryMB: config.vm?.maxMemoryMB || 1024,
-    cpuCores: config.vm?.cpuCores || 2,
-    timeout: config.vm?.timeout || 0,
-    qemuPath: config.vm?.qemuPath || 'qemu-system-x86_64',
-    enableKvm: config.vm?.enableKvm === true
-});
 
 const nodeManager = new NodeManager();
 
@@ -168,30 +159,21 @@ io.on('connection', (socket) => {
         
         socket.join(`server:${serverId}`);
         
-        // Get status from node or local sandboxManager
+        if (!serverData.nodeId) {
+            return socket.emit('error', 'Server has no node assigned');
+        }
+        
+        const client = nodeManager.getClient(serverData.nodeId);
         let status = 'stopped';
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (client && client.isConnected()) {
-                try {
-                    const vmStatus = await client.getVMStatus(serverId);
-                    status = vmStatus.status || 'stopped';
-                } catch {}
-            }
+        if (client && client.isConnected()) {
+            try {
+                const vmStatus = await client.getVMStatus(serverId);
+                status = vmStatus.status || 'stopped';
+            } catch {}
         } else {
-            status = sandboxManager.getServerStatus(serverId);
+            status = 'offline';
         }
         socket.emit('vm-status', status === 'running' ? 'started' : 'stopped');
-        
-        // Only get logs from local servers (nodes stream their own logs)
-        if (!serverData.nodeId) {
-            try {
-                const logs = await sandboxManager.getServerLogs(serverId, 100);
-                if (logs) {
-                    socket.emit('term-data', logs);
-                }
-            } catch (err) {}
-        }
     });
     
     socket.on('input', async (data) => {
@@ -202,20 +184,15 @@ io.on('connection', (socket) => {
         if (typeof inputData !== 'string' || inputData.length > 8192) return;
         
         const serverData = db.getServer(serverId);
-        if (!serverData) return;
+        if (!serverData || !serverData.nodeId) return;
         
         if (serverData.ownerId !== socket.user.id && socket.user.role !== 'admin') {
             return;
         }
         
-        // Route input to node or local sandboxManager
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (client && client.isConnected()) {
-                client.sendVMInput(serverId, inputData);
-            }
-        } else {
-            sandboxManager.sendInput(serverId, inputData);
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (client && client.isConnected()) {
+            client.sendVMInput(serverId, inputData);
         }
     });
     
@@ -311,74 +288,11 @@ io.of('/vnc').on('connection', async (socket) => {
         return;
     }
     
-    // Handle VNC for local servers
-    const vncSocketPath = sandboxManager.getVncSocketPath(serverId);
-    if (!vncSocketPath) {
-        socket.emit('error', 'VNC not available - VM may not be running');
-        socket.disconnect();
-        return;
-    }
-    
-    let vncSocket = null;
-    
-    log(`VNC connecting to socket: ${vncSocketPath}`);
-    
-    vncSocket = net.createConnection(vncSocketPath);
-    
-    vncSocket.on('connect', () => {
-        log(`VNC socket connected for server: ${serverId}`);
-        socket.emit('vnc-connected');
-    });
-    
-    vncSocket.on('data', (data) => {
-        socket.emit('vnc-data', data);
-    });
-    
-    vncSocket.on('error', (err) => {
-        log(`VNC socket error for ${serverId}: ${err.message}`);
-        socket.emit('error', 'VNC connection error: ' + err.message);
-        socket.disconnect();
-    });
-    
-    vncSocket.on('close', () => {
-        log(`VNC socket closed for server: ${serverId}`);
-        socket.emit('vnc-disconnected');
-        socket.disconnect();
-    });
-    
-    socket.on('vnc-data', (data) => {
-        if (vncSocket && !vncSocket.destroyed) {
-            vncSocket.write(Buffer.from(data));
-        }
-    });
-    
-    socket.on('disconnect', () => {
-        log(`VNC client disconnected for server: ${serverId}`);
-        if (vncSocket && !vncSocket.destroyed) {
-            vncSocket.destroy();
-        }
-    });
-});
-
-sandboxManager.on('log', (serverId, data) => {
-    io.to(`server:${serverId}`).emit('term-data', data);
-});
-
-sandboxManager.on('exit', (serverId, code) => {
-    io.to(`server:${serverId}`).emit('vm-status', 'stopped');
-    io.to(`server:${serverId}`).emit('term-data', `\r\n[VM exited with code ${code}]\r\n`);
-    db.updateServer(serverId, { status: 'stopped' });
-});
-
-sandboxManager.on('error', (serverId, error) => {
-    io.to(`server:${serverId}`).emit('term-data', `\r\n[Error: ${error}]\r\n`);
+    socket.emit('error', 'VNC not available - server has no node');
+    socket.disconnect();
 });
 
 const creationProgress = new Map();
-
-sandboxManager.on('creation-progress', (serverId, progress) => {
-    creationProgress.set(serverId, progress);
-});
 
 const PORT = config.port || process.env.PORT || 3000;
 
@@ -689,7 +603,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     
     const serversWithStatus = servers.map(s => ({
         ...s,
-        status: sandboxManager.getServerStatus(s.id),
+        status: s.status || 'stopped',
         image: getImage(s.imageId)?.name || 'Unknown'
     }));
     
@@ -836,43 +750,27 @@ app.post('/api/server/create', requireAuth, async (req, res, next) => {
         audit(user.id, user.username, 'vm_create', { serverId, serverName: serverData.name, imageId: image.id, nodeId: selectedNode?.id });
         triggerWebhooks('vm_create', { serverId, serverName: serverData.name, userId: user.id, imageId: image.id, nodeId: selectedNode?.id });
         
-        if (selectedNode) {
-            const client = nodeManager.getClient(selectedNode.id);
-            client.createVM({
-                serverId,
-                userId: user.id,
-                imageId: image.id,
-                imageUrl: image.url,
-                imageName: image.name,
-                imageDefaultUser: image.defaultUser,
-                ram: serverData.ram,
-                disk: serverData.diskSize,
-                cpuCores: serverData.cpuCores
-            }).then((result) => {
-                db.updateServer(serverId, { 
-                    status: 'stopped',
-                    password: result.password
-                });
-                log(`Server ${serverId} created on node ${selectedNode.name}`);
-            }).catch((err) => {
-                db.updateServer(serverId, { status: 'error', error: err.message });
-                log(`Server ${serverId} creation failed on node: ${err.message}`);
+        const client = nodeManager.getClient(selectedNode.id);
+        client.createVM({
+            serverId,
+            userId: user.id,
+            imageId: image.id,
+            imageUrl: image.url,
+            imageName: image.name,
+            imageDefaultUser: image.defaultUser,
+            ram: serverData.ram,
+            disk: serverData.diskSize,
+            cpuCores: serverData.cpuCores
+        }).then((result) => {
+            db.updateServer(serverId, { 
+                status: 'stopped',
+                password: result.password
             });
-        } else {
-            sandboxManager.createServer(user.id, serverId, {
-                imageId: image.id,
-                ram: serverData.ram,
-                diskSize: serverData.diskSize,
-                cpuLimit,
-                ioLimit
-            }).then(() => {
-                db.updateServer(serverId, { status: 'stopped' });
-                log(`Server ${serverId} created successfully (local)`);
-            }).catch((err) => {
-                db.updateServer(serverId, { status: 'error', error: err.message });
-                log(`Server ${serverId} creation failed: ${err.message}`);
-            });
-        }
+            log(`Server ${serverId} created on node ${selectedNode.name}`);
+        }).catch((err) => {
+            db.updateServer(serverId, { status: 'error', error: err.message });
+            log(`Server ${serverId} creation failed on node: ${err.message}`);
+        });
         
         res.json({ success: true, server: serverData });
         
@@ -901,12 +799,24 @@ app.get('/api/server/:id/vnc-code', requireAuth, async (req, res) => {
         return res.status(403).json({ error: 'Access denied' });
     }
     
-    const status = sandboxManager.getServerStatus(serverData.id);
-    if (status !== 'running') {
-        return res.status(400).json({ error: 'VM must be running to get VNC code' });
+    if (!serverData.nodeId) {
+        return res.status(400).json({ error: 'Server has no node assigned' });
     }
     
-    // Generate connection code with token and server info
+    const client = nodeManager.getClient(serverData.nodeId);
+    if (!client || !client.isConnected()) {
+        return res.status(400).json({ error: 'Node is offline' });
+    }
+    
+    try {
+        const vmStatus = await client.getVMStatus(serverData.id);
+        if (vmStatus.status !== 'running') {
+            return res.status(400).json({ error: 'VM must be running to get VNC code' });
+        }
+    } catch {
+        return res.status(400).json({ error: 'Could not get VM status' });
+    }
+    
     const protocol = req.secure ? 'https' : 'http';
     const host = req.get('host');
     const codeData = {
@@ -949,7 +859,6 @@ app.get('/api/server/:id', requireAuth, async (req, res) => {
         } catch {}
     }
 
-    // Get status from node or local sandboxManager
     let status = serverData.status || 'stopped';
     if (serverData.nodeId) {
         const client = nodeManager.getClient(serverData.nodeId);
@@ -961,8 +870,6 @@ app.get('/api/server/:id', requireAuth, async (req, res) => {
         } else {
             status = 'offline';
         }
-    } else {
-        status = sandboxManager.getServerStatus(serverData.id);
     }
 
     res.json({ 
@@ -995,15 +902,15 @@ app.post('/api/server/:id/start', requireAuth, async (req, res, next) => {
         
         log(`Starting VM ${serverId}`);
         
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            await client.startVM(serverId, serverData.ownerId);
-        } else {
-            await sandboxManager.startServer(serverData.ownerId, serverId);
+        if (!serverData.nodeId) {
+            return res.status(400).json({ error: 'Server has no node assigned' });
         }
+        
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (!client || !client.isConnected()) {
+            return res.status(400).json({ error: 'Node is offline' });
+        }
+        await client.startVM(serverId, serverData.ownerId);
         
         db.updateServer(serverId, { status: 'running' });
         io.to(`server:${serverId}`).emit('vm-status', 'started');
@@ -1024,13 +931,13 @@ app.post('/api/server/:id/stop', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
 
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (client && client.isConnected()) {
-                await client.stopVM(serverId);
-            }
-        } else {
-            sandboxManager.stopServer(serverId);
+        if (!serverData.nodeId) {
+            return res.status(400).json({ error: 'Server has no node assigned' });
+        }
+        
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (client && client.isConnected()) {
+            await client.stopVM(serverId);
         }
         
         db.updateServer(serverId, { status: 'stopped' });
@@ -1053,14 +960,13 @@ app.delete('/api/server/:id', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (client && client.isConnected()) {
-                await client.deleteVM(serverId, serverData.ownerId);
-            }
-        } else {
-            sandboxManager.stopServer(serverId);
-            await sandboxManager.deleteServer(serverData.ownerId, serverId);
+        if (!serverData.nodeId) {
+            return res.status(400).json({ error: 'Server has no node assigned' });
+        }
+        
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (client && client.isConnected()) {
+            await client.deleteVM(serverId, serverData.ownerId);
         }
         
         db.deleteServer(serverId);
@@ -1073,20 +979,7 @@ app.delete('/api/server/:id', requireAuth, async (req, res, next) => {
     }
 });
 
-app.get('/api/server/:id/logs', requireAuth, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        const logs = await sandboxManager.getServerLogs(req.params.id);
-        res.json({ logs });
-    } catch (err) {
-        next(err);
-    }
-});
+
 
 app.post('/api/server/:id/settings', requireAuth, async (req, res, next) => {
     try {
@@ -1116,20 +1009,14 @@ app.get('/api/server/:id/limits', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        let limits;
+        let limits = { ram: serverData.ram, cpuCores: serverData.cpuCores };
         if (serverData.nodeId) {
             const client = nodeManager.getClient(serverData.nodeId);
             if (client && client.isConnected()) {
                 try {
                     limits = await client.getLimits(serverData.id, serverData.ownerId);
-                } catch {
-                    limits = { ram: serverData.ram, cpuCores: serverData.cpuCores };
-                }
-            } else {
-                limits = { ram: serverData.ram, cpuCores: serverData.cpuCores };
+                } catch {}
             }
-        } else {
-            limits = await sandboxManager.getServerLimits(serverData.ownerId, serverData.id);
         }
         res.json(limits);
     } catch (err) {
@@ -1147,18 +1034,15 @@ app.post('/api/server/:id/limits', requireAuth, async (req, res, next) => {
         
         const { ram, cpuLimit, ioLimit, cpuCores } = req.body;
         
-        let result;
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            result = await client.updateLimits(serverData.id, serverData.ownerId, { ram, cpuCores });
-        } else {
-            result = await sandboxManager.updateServerLimits(serverData.ownerId, serverData.id, {
-                ram, cpuLimit, ioLimit, cpuCores
-            });
+        if (!serverData.nodeId) {
+            return res.status(400).json({ error: 'Server has no node assigned' });
         }
+        
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (!client || !client.isConnected()) {
+            return res.status(400).json({ error: 'Node is offline' });
+        }
+        const result = await client.updateLimits(serverData.id, serverData.ownerId, { ram, cpuCores });
         
         if (ram !== undefined) {
             db.updateServer(req.params.id, { ram });
@@ -1181,27 +1065,21 @@ app.get('/api/server/:id/stats', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        // Handle stats for remote nodes
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.json({ running: false, nodeOffline: true });
-            }
-            try {
-                const stats = await client.getVMStats(req.params.id);
-                res.json({ running: true, ...stats.stats });
-            } catch {
-                res.json({ running: false });
-            }
-            return;
+        if (!serverData.nodeId) {
+            return res.json({ running: false, error: 'No node assigned' });
         }
         
-        if (sandboxManager.getServerStatus(serverData.id) !== 'running') {
-            return res.json({ running: false });
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (!client || !client.isConnected()) {
+            return res.json({ running: false, nodeOffline: true });
         }
         
-        const stats = await sandboxManager.getServerStats(serverData.id);
-        res.json({ running: true, ...stats });
+        try {
+            const stats = await client.getVMStats(req.params.id);
+            res.json({ running: true, ...stats.stats });
+        } catch {
+            res.json({ running: false });
+        }
     } catch (err) {
         next(err);
     }
@@ -1226,19 +1104,15 @@ app.post('/api/server/:id/resize-disk', requireAuth, async (req, res, next) => {
             return res.status(400).json({ error: `Exceeds disk quota. Available: ${userLimits.maxDisk - otherDisk}GB` });
         }
         
-        let result;
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            result = await client.resizeDisk(serverData.id, serverData.ownerId, newSizeGB);
-        } else {
-            if (sandboxManager.getServerStatus(serverData.id) === 'running') {
-                return res.status(400).json({ error: 'Stop the VM before resizing disk' });
-            }
-            result = await sandboxManager.resizeDisk(serverData.ownerId, serverData.id, newSizeGB);
+        if (!serverData.nodeId) {
+            return res.status(400).json({ error: 'Server has no node assigned' });
         }
+        
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (!client || !client.isConnected()) {
+            return res.status(400).json({ error: 'Node is offline' });
+        }
+        const result = await client.resizeDisk(serverData.id, serverData.ownerId, newSizeGB);
         
         db.updateServer(serverData.id, { diskSize: `${newSizeGB}G` });
         audit(req.user.id, req.user.username, 'disk_resize', { serverId: serverData.id, newSize: newSizeGB });
@@ -1249,53 +1123,7 @@ app.post('/api/server/:id/resize-disk', requireAuth, async (req, res, next) => {
     }
 });
 
-app.post('/api/server/:id/hotplug-ram', requireAuth, async (req, res, next) => {
-    try {
-        const { newRamMB } = req.body;
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        if (sandboxManager.getServerStatus(serverData.id) !== 'running') {
-            return res.status(400).json({ error: 'VM must be running for RAM hotplug' });
-        }
-        
-        if (newRamMB > serverData.ram) {
-            return res.status(400).json({ error: `Cannot exceed configured RAM (${serverData.ram}MB). Change limits and restart.` });
-        }
-        
-        const result = await sandboxManager.hotplugRam(serverData.id, newRamMB);
-        res.json(result);
-    } catch (err) {
-        next(err);
-    }
-});
 
-app.get('/api/server/:id/proxy', requireAuth, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        if (sandboxManager.getServerStatus(serverData.id) !== 'running') {
-            return res.json({ available: false, reason: 'VM not running' });
-        }
-        
-        const port = await sandboxManager.getVmProxyPort(serverData.id);
-        
-        res.json({
-            available: !!port,
-            url: port ? `/s/${serverData.id}/` : null,
-            internalPort: port
-        });
-    } catch (err) {
-        next(err);
-    }
-});
 
 app.get('/api/server/:id/metrics', requireAuth, async (req, res, next) => {
     try {
@@ -1326,181 +1154,23 @@ app.get('/api/server/:id/disk-info', requireAuth, async (req, res, next) => {
             return res.status(403).json({ error: 'Access denied' });
         }
         
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (client && client.isConnected()) {
-                try {
-                    const info = await client.getDiskInfo(serverData.id, serverData.ownerId);
-                    res.json({
-                        virtualSize: formatBytes(info.virtualSize),
-                        actualSize: formatBytes(info.actualSize),
-                        format: info.format
-                    });
-                    return;
-                } catch {}
-            }
-            res.json({ virtualSize: '-', actualSize: '-', format: '-' });
-            return;
+        if (!serverData.nodeId) {
+            return res.json({ virtualSize: '-', actualSize: '-', format: '-' });
         }
         
-        const diskPath = sandboxManager.getDiskPath(serverData.ownerId, serverData.id);
-        
-        try {
-            const info = await sandboxManager.execCommand('qemu-img', ['info', '--output=json', diskPath]);
-            const parsed = JSON.parse(info);
-            
-            res.json({
-                virtualSize: formatBytes(parsed['virtual-size']),
-                actualSize: formatBytes(parsed['actual-size']),
-                format: parsed.format
-            });
-        } catch {
-            res.json({ virtualSize: '-', actualSize: '-', format: '-' });
+        const client = nodeManager.getClient(serverData.nodeId);
+        if (client && client.isConnected()) {
+            try {
+                const info = await client.getDiskInfo(serverData.id, serverData.ownerId);
+                res.json({
+                    virtualSize: formatBytes(info.virtualSize),
+                    actualSize: formatBytes(info.actualSize),
+                    format: info.format
+                });
+                return;
+            } catch {}
         }
-    } catch (err) {
-        next(err);
-    }
-});
-
-app.post('/api/server/:id/reinstall', requireAuth, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        if (sandboxManager.getServerStatus(serverData.id) === 'running') {
-            return res.status(400).json({ error: 'Stop the VM first' });
-        }
-        
-        db.updateServer(serverData.id, { status: 'creating' });
-        
-        await sandboxManager.deleteServer(serverData.ownerId, serverData.id);
-        
-        sandboxManager.createServer(serverData.ownerId, serverData.id, {
-            imageId: serverData.imageId,
-            ram: serverData.ram,
-            diskSize: serverData.diskSize,
-            cpuLimit: serverData.cpuLimit || 100,
-            ioLimit: serverData.ioLimit || 0
-        }).then(() => {
-            db.updateServer(serverData.id, { status: 'stopped' });
-            log(`Server ${serverData.id} reinstalled successfully`);
-        }).catch((err) => {
-            db.updateServer(serverData.id, { status: 'error', error: err.message });
-            log(`Server ${serverData.id} reinstall failed: ${err.message}`);
-        });
-        
-        res.json({ success: true });
-    } catch (err) {
-        next(err);
-    }
-});
-
-// =====================
-// SNAPSHOTS
-// =====================
-
-app.get('/api/server/:id/snapshots', requireAuth, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        let snapshots;
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            snapshots = await client.listSnapshots(serverData.id, serverData.ownerId);
-        } else {
-            snapshots = await sandboxManager.listSnapshots(serverData.ownerId, serverData.id);
-        }
-        
-        res.json({ snapshots });
-    } catch (err) {
-        next(err);
-    }
-});
-
-app.post('/api/server/:id/snapshots', requireAuth, async (req, res, next) => {
-    try {
-        const { name } = req.body;
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        let result;
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            result = await client.createSnapshot(serverData.id, serverData.ownerId, name);
-        } else {
-            result = await sandboxManager.createSnapshot(serverData.ownerId, serverData.id, name);
-        }
-        
-        audit(req.user.id, req.user.username, 'snapshot_create', { serverId: serverData.id, snapshotId: result.id });
-        res.json(result);
-    } catch (err) {
-        next(err);
-    }
-});
-
-app.post('/api/server/:id/snapshots/:snapshotId/restore', requireAuth, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        let result;
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            result = await client.restoreSnapshot(serverData.id, serverData.ownerId, req.params.snapshotId);
-        } else {
-            result = await sandboxManager.restoreSnapshot(serverData.ownerId, serverData.id, req.params.snapshotId);
-        }
-        
-        audit(req.user.id, req.user.username, 'snapshot_restore', { serverId: serverData.id, snapshotId: req.params.snapshotId });
-        res.json(result);
-    } catch (err) {
-        next(err);
-    }
-});
-
-app.delete('/api/server/:id/snapshots/:snapshotId', requireAuth, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        if (serverData.ownerId !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-        
-        let result;
-        if (serverData.nodeId) {
-            const client = nodeManager.getClient(serverData.nodeId);
-            if (!client || !client.isConnected()) {
-                return res.status(400).json({ error: 'Node is offline' });
-            }
-            result = await client.deleteSnapshot(serverData.id, serverData.ownerId, req.params.snapshotId);
-        } else {
-            result = await sandboxManager.deleteSnapshot(serverData.ownerId, serverData.id, req.params.snapshotId);
-        }
-        
-        audit(req.user.id, req.user.username, 'snapshot_delete', { serverId: serverData.id, snapshotId: req.params.snapshotId });
-        res.json(result);
+        res.json({ virtualSize: '-', actualSize: '-', format: '-' });
     } catch (err) {
         next(err);
     }
@@ -1518,9 +1188,23 @@ function formatBytes(bytes) {
 // ADMIN ROUTES
 // =====================
 
-app.get('/api/admin/stats', requireAdmin, (req, res) => {
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
     const stats = db.getStats();
-    const runningServers = sandboxManager.getRunningServers().length;
+    
+    let runningServers = 0;
+    const servers = db.getServers();
+    for (const s of servers) {
+        if (s.nodeId) {
+            const client = nodeManager.getClient(s.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    const vmStatus = await client.getVMStatus(s.id);
+                    if (vmStatus.status === 'running') runningServers++;
+                } catch {}
+            }
+        }
+    }
+    
     res.json({ ...stats, runningServers });
 });
 
@@ -1546,7 +1230,7 @@ app.get('/api/admin/servers', requireAdmin, (req, res) => {
         const image = getImage(s.imageId);
         return {
             ...s,
-            status: sandboxManager.getServerStatus(s.id),
+            status: s.status || 'stopped',
             ownerName: owner ? owner.username : 'Unknown',
             imageName: image?.name || 'Unknown'
         };
@@ -1600,7 +1284,7 @@ app.get('/api/admin/user/:id', requireAdmin, (req, res) => {
             ram: s.ram,
             suspended: s.suspended || false,
             imageName: getImage(s.imageId)?.name || 'Unknown',
-            status: sandboxManager.getServerStatus(s.id)
+            status: s.status || 'stopped'
         })),
         created_at: user.created_at
     });
@@ -1636,8 +1320,15 @@ app.delete('/api/admin/user/:id', requireAdmin, async (req, res, next) => {
         
         const userServers = db.getUserServers(user.id);
         for (const s of userServers) {
-            sandboxManager.stopServer(s.id);
-            await sandboxManager.deleteServer(user.id, s.id);
+            if (s.nodeId) {
+                const client = nodeManager.getClient(s.nodeId);
+                if (client && client.isConnected()) {
+                    try {
+                        await client.stopVM(s.id);
+                        await client.deleteVM(s.id, user.id);
+                    } catch {}
+                }
+            }
         }
         
         db.deleteUserServers(user.id);
@@ -1687,9 +1378,22 @@ app.get('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
         const owner = db.findUserById(serverData.ownerId);
         const image = getImage(serverData.imageId);
         
+        let status = serverData.status || 'stopped';
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    const vmStatus = await client.getVMStatus(serverData.id);
+                    status = vmStatus.status || 'stopped';
+                } catch {}
+            } else {
+                status = 'offline';
+            }
+        }
+        
         res.json({
             ...serverData,
-            status: sandboxManager.getServerStatus(serverData.id),
+            status,
             ownerName: owner?.username || 'Unknown',
             imageName: image?.name || 'Unknown'
         });
@@ -1713,10 +1417,11 @@ app.post('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
         
         const updated = db.updateServer(req.params.id, updates);
         
-        if (ram !== undefined || cpuLimit !== undefined || ioLimit !== undefined) {
-            await sandboxManager.updateServerLimits(serverData.ownerId, serverData.id, {
-                ram, cpuLimit, ioLimit
-            }).catch(() => {});
+        if ((ram !== undefined || cpuLimit !== undefined || ioLimit !== undefined) && serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                await client.updateLimits(serverData.id, serverData.ownerId, { ram, cpuCores: Math.ceil((cpuLimit || 100) / 100) }).catch(() => {});
+            }
         }
         
         res.json({ success: true, server: updated });
@@ -1725,47 +1430,26 @@ app.post('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
     }
 });
 
-app.post('/api/admin/server/:id/reinstall', requireAdmin, async (req, res, next) => {
-    try {
-        const serverData = db.getServer(req.params.id);
-        if (!serverData) return res.status(404).json({ error: 'Server not found' });
-        
-        if (sandboxManager.getServerStatus(serverData.id) === 'running') {
-            return res.status(400).json({ error: 'Stop the VM first' });
-        }
-        
-        db.updateServer(serverData.id, { status: 'creating' });
-        
-        await sandboxManager.deleteServer(serverData.ownerId, serverData.id);
-        
-        sandboxManager.createServer(serverData.ownerId, serverData.id, {
-            imageId: serverData.imageId,
-            ram: serverData.ram,
-            diskSize: serverData.diskSize,
-            cpuLimit: serverData.cpuLimit || 100,
-            ioLimit: serverData.ioLimit || 0
-        }).then(() => {
-            db.updateServer(serverData.id, { status: 'stopped' });
-            log(`Server ${serverData.id} reinstalled by admin`);
-        }).catch((err) => {
-            db.updateServer(serverData.id, { status: 'error', error: err.message });
-        });
-        
-        res.json({ success: true });
-    } catch (err) {
-        next(err);
-    }
-});
-
 app.post('/api/admin/stop-all', requireAdmin, async (req, res, next) => {
     try {
-        const running = sandboxManager.getRunningServers();
-        for (const s of running) {
-            sandboxManager.stopServer(s.serverId);
-            db.updateServer(s.serverId, { status: 'stopped' });
+        const servers = db.getServers();
+        let stopped = 0;
+        
+        for (const s of servers) {
+            if (s.nodeId && s.status === 'running') {
+                const client = nodeManager.getClient(s.nodeId);
+                if (client && client.isConnected()) {
+                    try {
+                        await client.stopVM(s.id);
+                        db.updateServer(s.id, { status: 'stopped' });
+                        stopped++;
+                    } catch {}
+                }
+            }
         }
-        log(`Admin stopped all VMs (${running.length} total)`);
-        res.json({ success: true, stopped: running.length });
+        
+        log(`Admin stopped all VMs (${stopped} total)`);
+        res.json({ success: true, stopped });
     } catch (err) {
         next(err);
     }
@@ -1780,8 +1464,13 @@ app.post('/api/admin/server/:id/suspend', requireAdmin, async (req, res, next) =
         const updates = { suspended: !!suspended };
         if (reason !== undefined) updates.suspendReason = reason;
         
-        if (suspended && sandboxManager.getServerStatus(serverData.id) === 'running') {
-            sandboxManager.stopServer(serverData.id);
+        if (suspended && serverData.nodeId && serverData.status === 'running') {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    await client.stopVM(serverData.id);
+                } catch {}
+            }
             updates.status = 'stopped';
         }
         
@@ -1797,7 +1486,14 @@ app.post('/api/admin/server/:id/force-stop', requireAdmin, async (req, res, next
         const serverData = db.getServer(req.params.id);
         if (!serverData) return res.status(404).json({ error: 'Server not found' });
         
-        sandboxManager.stopServer(serverData.id);
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    await client.stopVM(serverData.id);
+                } catch {}
+            }
+        }
         
         db.updateServer(req.params.id, { status: 'stopped' });
         res.json({ success: true });
@@ -1811,8 +1507,15 @@ app.delete('/api/admin/server/:id', requireAdmin, async (req, res, next) => {
         const serverData = db.getServer(req.params.id);
         if (!serverData) return res.status(404).json({ error: 'Server not found' });
         
-        sandboxManager.stopServer(serverData.id);
-        await sandboxManager.deleteServer(serverData.ownerId, serverData.id);
+        if (serverData.nodeId) {
+            const client = nodeManager.getClient(serverData.nodeId);
+            if (client && client.isConnected()) {
+                try {
+                    await client.stopVM(serverData.id);
+                    await client.deleteVM(serverData.id, serverData.ownerId);
+                } catch {}
+            }
+        }
         
         db.deleteServer(req.params.id);
         res.json({ success: true });
@@ -2253,7 +1956,7 @@ app.get('/api/v1/servers', (req, res) => {
     const servers = db.getUserServers(req.user.id).map(s => ({
         id: s.id,
         name: s.name,
-        status: sandboxManager.getServerStatus(s.id),
+        status: s.status || 'stopped',
         ram: s.ram,
         diskSize: s.diskSize
     }));
@@ -2270,8 +1973,17 @@ app.post('/api/v1/servers/:id/start', async (req, res) => {
         return res.status(404).json({ error: 'Server not found' });
     }
     
+    if (!server.nodeId) {
+        return res.status(400).json({ error: 'Server has no node assigned' });
+    }
+    
+    const client = nodeManager.getClient(server.nodeId);
+    if (!client || !client.isConnected()) {
+        return res.status(400).json({ error: 'Node is offline' });
+    }
+    
     try {
-        await sandboxManager.startServer(server.ownerId, server.id);
+        await client.startVM(server.id, server.ownerId);
         db.updateServer(server.id, { status: 'running' });
         audit(req.user.id, req.user.username, 'vm_started_api', { serverId: server.id });
         res.json({ success: true, status: 'running' });
@@ -2280,7 +1992,7 @@ app.post('/api/v1/servers/:id/start', async (req, res) => {
     }
 });
 
-app.post('/api/v1/servers/:id/stop', (req, res) => {
+app.post('/api/v1/servers/:id/stop', async (req, res) => {
     if (!req.apiKey.permissions.includes('write')) {
         return res.status(403).json({ error: 'Write permission required' });
     }
@@ -2290,7 +2002,17 @@ app.post('/api/v1/servers/:id/stop', (req, res) => {
         return res.status(404).json({ error: 'Server not found' });
     }
     
-    sandboxManager.stopServer(server.id);
+    if (!server.nodeId) {
+        return res.status(400).json({ error: 'Server has no node assigned' });
+    }
+    
+    const client = nodeManager.getClient(server.nodeId);
+    if (client && client.isConnected()) {
+        try {
+            await client.stopVM(server.id);
+        } catch {}
+    }
+    
     db.updateServer(server.id, { status: 'stopped' });
     audit(req.user.id, req.user.username, 'vm_stopped_api', { serverId: server.id });
     res.json({ success: true, status: 'stopped' });
@@ -2302,8 +2024,21 @@ app.get('/api/v1/servers/:id/stats', async (req, res) => {
         return res.status(404).json({ error: 'Server not found' });
     }
     
-    const stats = await sandboxManager.getServerStats(server.id);
-    res.json(stats || { running: false });
+    if (!server.nodeId) {
+        return res.json({ running: false });
+    }
+    
+    const client = nodeManager.getClient(server.nodeId);
+    if (!client || !client.isConnected()) {
+        return res.json({ running: false, nodeOffline: true });
+    }
+    
+    try {
+        const stats = await client.getVMStats(server.id);
+        res.json({ running: true, ...stats.stats });
+    } catch {
+        res.json({ running: false });
+    }
 });
 
 // =====================
@@ -2385,20 +2120,24 @@ setInterval(() => {
             
             if (matches) {
                 const server = db.getServer(schedule.serverId);
-                if (!server) continue;
+                if (!server || !server.nodeId) continue;
+                
+                const client = nodeManager.getClient(server.nodeId);
+                if (!client || !client.isConnected()) continue;
                 
                 if (schedule.action === 'start') {
-                    sandboxManager.startServer(server.ownerId, server.id).catch(() => {});
+                    client.startVM(server.id, server.ownerId).catch(() => {});
                     db.updateServer(server.id, { status: 'running' });
                 } else if (schedule.action === 'stop') {
-                    sandboxManager.stopServer(server.id);
+                    client.stopVM(server.id).catch(() => {});
                     db.updateServer(server.id, { status: 'stopped' });
                 } else if (schedule.action === 'restart') {
-                    sandboxManager.stopServer(server.id);
-                    setTimeout(() => {
-                        sandboxManager.startServer(server.ownerId, server.id).catch(() => {});
-                        db.updateServer(server.id, { status: 'running' });
-                    }, 5000);
+                    client.stopVM(server.id).then(() => {
+                        setTimeout(() => {
+                            client.startVM(server.id, server.ownerId).catch(() => {});
+                            db.updateServer(server.id, { status: 'running' });
+                        }, 5000);
+                    }).catch(() => {});
                 }
                 
                 db.updateSchedule(schedule.id, { lastRun: new Date().toISOString() });
@@ -2768,23 +2507,28 @@ setInterval(async () => {
             continue;
         }
         
-        const currentStatus = sandboxManager.getServerStatus(server.id);
+        if (!server.nodeId) continue;
+        
+        const client = nodeManager.getClient(server.nodeId);
+        if (!client || !client.isConnected()) continue;
+        
+        const currentStatus = server.status || 'stopped';
         
         try {
             if (schedule.action === 'start' && currentStatus !== 'running') {
-                await sandboxManager.startServer(server.ownerId, server.id);
+                await client.startVM(server.id, server.ownerId);
                 db.updateServer(server.id, { status: 'running' });
                 log(`Scheduler: Started VM ${server.name} (${server.id})`);
                 audit('system', 'scheduler', 'scheduled_start', { serverId: server.id, scheduleId: schedule.id });
             } else if (schedule.action === 'stop' && currentStatus === 'running') {
-                sandboxManager.stopServer(server.id);
+                await client.stopVM(server.id);
                 db.updateServer(server.id, { status: 'stopped' });
                 log(`Scheduler: Stopped VM ${server.name} (${server.id})`);
                 audit('system', 'scheduler', 'scheduled_stop', { serverId: server.id, scheduleId: schedule.id });
             } else if (schedule.action === 'restart' && currentStatus === 'running') {
-                sandboxManager.stopServer(server.id);
+                await client.stopVM(server.id);
                 await new Promise(r => setTimeout(r, 3000));
-                await sandboxManager.startServer(server.ownerId, server.id);
+                await client.startVM(server.id, server.ownerId);
                 db.updateServer(server.id, { status: 'running' });
                 log(`Scheduler: Restarted VM ${server.name} (${server.id})`);
                 audit('system', 'scheduler', 'scheduled_restart', { serverId: server.id, scheduleId: schedule.id });
@@ -2802,17 +2546,20 @@ setInterval(async () => {
 // =====================
 
 setInterval(async () => {
-    const runningServers = sandboxManager.getRunningServers();
+    const servers = db.getServers().filter(s => s.status === 'running' && s.nodeId);
     
-    for (const { serverId } of runningServers) {
+    for (const server of servers) {
         try {
-            const stats = await sandboxManager.getServerStats(serverId);
-            if (stats) {
-                db.addMetric(serverId, {
-                    cpu: stats.cpuUsage || 0,
-                    memoryUsed: stats.memory?.actual || 0,
-                    memoryTotal: stats.memory?.configured || 0,
-                    uptime: stats.uptime || 0
+            const client = nodeManager.getClient(server.nodeId);
+            if (!client || !client.isConnected()) continue;
+            
+            const result = await client.getVMStats(server.id);
+            if (result && result.stats) {
+                db.addMetric(server.id, {
+                    cpu: result.stats.cpuUsage || 0,
+                    memoryUsed: result.stats.memory?.actual || 0,
+                    memoryTotal: result.stats.memory?.configured || 0,
+                    uptime: result.stats.uptime || 0
                 });
             }
         } catch {}
@@ -2827,7 +2574,16 @@ setInterval(async () => {
         const alerts = db.getServerAlerts(server.id);
         if (alerts.length === 0) continue;
         
-        const stats = await sandboxManager.getServerStats(server.id);
+        if (!server.nodeId || server.status !== 'running') continue;
+        
+        const client = nodeManager.getClient(server.nodeId);
+        if (!client || !client.isConnected()) continue;
+        
+        let stats = null;
+        try {
+            const result = await client.getVMStats(server.id);
+            stats = result?.stats;
+        } catch {}
         if (!stats) continue;
         
         for (const alert of alerts) {
@@ -2862,7 +2618,7 @@ setInterval(async () => {
                 });
                 
                 if (alert.action === 'stop') {
-                    sandboxManager.stopServer(server.id);
+                    client.stopVM(server.id).catch(() => {});
                     db.updateServer(server.id, { status: 'stopped' });
                 }
             } else if (!shouldTrigger && alert.triggered) {
@@ -2889,7 +2645,7 @@ app.post('/api/admin/server/:id/transfer', requireAdmin, async (req, res) => {
         return res.status(404).json({ error: 'New owner not found' });
     }
     
-    if (sandboxManager.getServerStatus(server.id) === 'running') {
+    if (server.status === 'running') {
         return res.status(400).json({ error: 'Stop the VM before transferring' });
     }
     
@@ -2970,12 +2726,17 @@ app.post('/api/admin/maintenance', requireAdmin, (req, res) => {
     db.updateSettings(updates);
     
     if (enabled && stopAllVms) {
-        const running = sandboxManager.getRunningServers();
-        for (const s of running) {
-            sandboxManager.stopServer(s.serverId);
-            db.updateServer(s.serverId, { status: 'stopped' });
+        const servers = db.getServers().filter(s => s.status === 'running' && s.nodeId);
+        let stopped = 0;
+        for (const s of servers) {
+            const client = nodeManager.getClient(s.nodeId);
+            if (client && client.isConnected()) {
+                client.stopVM(s.id).catch(() => {});
+                db.updateServer(s.id, { status: 'stopped' });
+                stopped++;
+            }
         }
-        log(`Maintenance mode: stopped ${running.length} VMs`);
+        log(`Maintenance mode: stopped ${stopped} VMs`);
     }
     
     audit(req.user.id, req.user.username, enabled ? 'maintenance_enabled' : 'maintenance_disabled');
@@ -3027,14 +2788,16 @@ async function proxyToVm(req, res, serverId, useHttps = true) {
         return res.status(404).json({ error: 'Server not found' });
     }
     
-    if (sandboxManager.getServerStatus(serverId) !== 'running') {
+    if (serverData.status !== 'running') {
         return res.status(503).json({ error: 'VM is not running' });
     }
     
-    // Get proxy port (HTTP 80)
-    const proxyPort = sandboxManager.getVmProxyPort(serverId);
+    if (!serverData.nodeId) {
+        return res.status(503).json({ error: 'Server has no node assigned' });
+    }
     
-    if (!proxyPort) {
+    // VM proxy not available for node-based servers through this endpoint
+    if (serverData.nodeId) {
         return res.status(503).send(`<!DOCTYPE html>
 <html><head><title>Proxy Not Ready</title>
 <style>body{font-family:system-ui;max-width:600px;margin:50px auto;padding:20px;text-align:center}
@@ -3123,7 +2886,6 @@ app.use((req, res) => {
 process.on('SIGTERM', () => {
     log('SIGTERM received, shutting down...');
     nodeManager.shutdown();
-    sandboxManager.shutdown();
     server.close(() => {
         process.exit(0);
     });
@@ -3132,7 +2894,6 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
     log('SIGINT received, shutting down...');
     nodeManager.shutdown();
-    sandboxManager.shutdown();
     server.close(() => {
         process.exit(0);
     });
