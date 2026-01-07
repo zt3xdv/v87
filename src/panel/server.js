@@ -310,7 +310,9 @@ io.of('/vnc').on('connection', async (socket) => {
             await client.connectVNC(serverId);
             
             const onVncData = (data) => {
-                socket.emit('vnc-data', Buffer.from(data.data, 'base64'));
+                // data.data is now a raw Buffer (binary optimization)
+                const buffer = Buffer.isBuffer(data.data) ? data.data : Buffer.from(data.data, 'base64');
+                socket.emit('vnc-data', buffer);
             };
             
             const onVncDisconnected = () => {
@@ -324,7 +326,8 @@ io.of('/vnc').on('connection', async (socket) => {
             socket.emit('vnc-connected');
             
             socket.on('vnc-data', (data) => {
-                client.sendVNCData(Buffer.from(data).toString('base64'));
+                // Send raw buffer to node (binary optimization)
+                client.sendVNCData(Buffer.from(data));
             });
             
             socket.on('disconnect', () => {

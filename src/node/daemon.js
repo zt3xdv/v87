@@ -141,8 +141,13 @@ export class NodeDaemon {
             }
         }, 10000);
 
-        ws.on('message', async (data) => {
+        ws.on('message', async (data, isBinary) => {
             try {
+                // Handle binary VNC data from panel
+                if (isBinary && Buffer.isBuffer(data)) {
+                    this.handleBinaryMessage(ws, data);
+                    return;
+                }
                 const message = JSON.parse(data.toString());
                 await this.handleMessage(ws, message);
             } catch (err) {
@@ -575,9 +580,23 @@ export class NodeDaemon {
         }
     }
 
+    handleBinaryMessage(ws, buffer) {
+        if (buffer.length < 1) return;
+        
+        const OPCODE_VNC_DATA = 0x01;
+        const opcode = buffer.readUInt8(0);
+        const payload = buffer.subarray(1);
+
+        if (opcode === OPCODE_VNC_DATA && ws.vncSocket) {
+            ws.vncSocket.write(payload);
+        }
+    }
+
     handleVNCData(ws, payload) {
         if (ws.vncSocket && payload.data) {
-            ws.vncSocket.write(Buffer.from(payload.data, 'base64'));
+            // Support both binary buffer and base64 string for backwards compatibility
+            const data = Buffer.isBuffer(payload.data) ? payload.data : Buffer.from(payload.data, 'base64');
+            ws.vncSocket.write(data);
         }
     }
 

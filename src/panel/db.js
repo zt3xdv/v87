@@ -1,145 +1,131 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import BinaryDB from './utils/binarydb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const SERVERS_FILE = path.join(DATA_DIR, 'servers.json');
-const AUDIT_FILE = path.join(DATA_DIR, 'audit.json');
-const APIKEYS_FILE = path.join(DATA_DIR, 'apikeys.json');
-const SCHEDULES_FILE = path.join(DATA_DIR, 'schedules.json');
-const WEBHOOKS_FILE = path.join(DATA_DIR, 'webhooks.json');
-const ALERTS_FILE = path.join(DATA_DIR, 'alerts.json');
-const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
-const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
-const NODES_FILE = path.join(DATA_DIR, 'nodes.json');
+const DB_PATH = path.join(DATA_DIR, 'v87.db');
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
-if (!fs.existsSync(SERVERS_FILE)) fs.writeFileSync(SERVERS_FILE, '[]');
-if (!fs.existsSync(AUDIT_FILE)) fs.writeFileSync(AUDIT_FILE, '[]');
-if (!fs.existsSync(APIKEYS_FILE)) fs.writeFileSync(APIKEYS_FILE, '[]');
-if (!fs.existsSync(SCHEDULES_FILE)) fs.writeFileSync(SCHEDULES_FILE, '[]');
-if (!fs.existsSync(WEBHOOKS_FILE)) fs.writeFileSync(WEBHOOKS_FILE, '[]');
-if (!fs.existsSync(ALERTS_FILE)) fs.writeFileSync(ALERTS_FILE, '[]');
-if (!fs.existsSync(SETTINGS_FILE)) fs.writeFileSync(SETTINGS_FILE, '{}');
-if (!fs.existsSync(METRICS_FILE)) fs.writeFileSync(METRICS_FILE, '{}');
-if (!fs.existsSync(NODES_FILE)) fs.writeFileSync(NODES_FILE, '[]');
+// Initialize BinaryDB
+const db = new BinaryDB(DB_PATH, {
+    compactThreshold: 500,
+    syncInterval: 2000,
+    autoCompact: true
+});
 
-function load(file) {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
+// Initialize database and create indexes
+await db.init();
 
-function save(file, data) {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
+// Create indexes for fast lookups
+db.collection('users').createIndex('username');
+db.collection('users').createIndex('email');
+db.collection('servers').createIndex('ownerId');
+db.collection('servers').createIndex('nodeId');
+db.collection('apikeys').createIndex('userId');
+db.collection('apikeys').createIndex('key');
+db.collection('schedules').createIndex('serverId');
+db.collection('schedules').createIndex('userId');
+db.collection('webhooks').createIndex('userId');
+db.collection('alerts').createIndex('userId');
+db.collection('alerts').createIndex('serverId');
+
+// Collections
+const users = db.collection('users');
+const servers = db.collection('servers');
+const audit = db.collection('audit');
+const apikeys = db.collection('apikeys');
+const schedules = db.collection('schedules');
+const webhooks = db.collection('webhooks');
+const alerts = db.collection('alerts');
+const settings = db.collection('settings');
+const metrics = db.collection('metrics');
+const nodes = db.collection('nodes');
 
 export default {
     // Users
-    getUsers: () => load(USERS_FILE),
-    saveUsers: (users) => save(USERS_FILE, users),
-    
-    findUser: (username) => load(USERS_FILE).find(u => u.username === username),
-    findUserById: (id) => load(USERS_FILE).find(u => u.id === id),
-    
-    createUser: (user) => {
-        const users = load(USERS_FILE);
-        users.push(user);
-        save(USERS_FILE, users);
+    getUsers: () => users.findAll(),
+    saveUsers: (data) => {
+        // Clear and reinsert (for legacy compatibility)
+        const existing = users.findAll();
+        existing.forEach(u => users.delete(u.id));
+        data.forEach(u => users.insert(u));
     },
     
+    findUser: (username) => users.findOne({ username }),
+    findUserById: (id) => users.findById(id),
+    findUserByEmail: (email) => users.findOne({ email }),
+    
+    createUser: (user) => users.insert(user),
+    
     createFirstAdmin: (user) => {
-        const users = load(USERS_FILE);
-        if (users.length > 0) {
+        if (users.count() > 0) {
             return null;
         }
         user.role = 'admin';
-        users.push(user);
-        save(USERS_FILE, users);
-        return user;
+        return users.insert(user);
     },
     
-    updateUser: (id, updates) => {
-        const users = load(USERS_FILE);
-        const index = users.findIndex(u => u.id === id);
-        if (index !== -1) {
-            users[index] = { ...users[index], ...updates };
-            save(USERS_FILE, users);
-            return users[index];
-        }
-        return null;
-    },
+    updateUser: (id, updates) => users.update(id, updates),
     
     deleteUser: (id) => {
-        const users = load(USERS_FILE).filter(u => u.id !== id);
-        save(USERS_FILE, users);
+        users.delete(id);
     },
     
     // Servers
-    getServers: () => load(SERVERS_FILE),
-    saveServers: (servers) => save(SERVERS_FILE, servers),
-    
-    getUserServers: (userId) => load(SERVERS_FILE).filter(s => s.ownerId === userId),
-    getServer: (id) => load(SERVERS_FILE).find(s => s.id === id),
-    
-    addServer: (server) => {
-        const servers = load(SERVERS_FILE);
-        servers.push(server);
-        save(SERVERS_FILE, servers);
+    getServers: () => servers.findAll(),
+    saveServers: (data) => {
+        const existing = servers.findAll();
+        existing.forEach(s => servers.delete(s.id));
+        data.forEach(s => servers.insert(s));
     },
     
-    updateServer: (id, updates) => {
-        const servers = load(SERVERS_FILE);
-        const index = servers.findIndex(s => s.id === id);
-        if (index !== -1) {
-            servers[index] = { ...servers[index], ...updates };
-            save(SERVERS_FILE, servers);
-            return servers[index];
-        }
-        return null;
-    },
+    getUserServers: (userId) => servers.find({ ownerId: userId }),
+    getServer: (id) => servers.findById(id),
+    
+    addServer: (server) => servers.insert(server),
+    
+    updateServer: (id, updates) => servers.update(id, updates),
     
     deleteServer: (id) => {
-        const servers = load(SERVERS_FILE).filter(s => s.id !== id);
-        save(SERVERS_FILE, servers);
+        servers.delete(id);
     },
     
     deleteUserServers: (userId) => {
-        const servers = load(SERVERS_FILE).filter(s => s.ownerId !== userId);
-        save(SERVERS_FILE, servers);
+        servers.deleteMany({ ownerId: userId });
     },
     
     // Stats
     getStats: () => {
-        const users = load(USERS_FILE);
-        const servers = load(SERVERS_FILE);
+        const allUsers = users.findAll();
+        const allServers = servers.findAll();
         return {
-            totalUsers: users.length,
-            totalServers: servers.length,
-            totalRam: servers.reduce((acc, s) => acc + (s.ram || 0), 0),
-            suspendedUsers: users.filter(u => u.suspended).length,
-            suspendedServers: servers.filter(s => s.suspended).length
+            totalUsers: allUsers.length,
+            totalServers: allServers.length,
+            totalRam: allServers.reduce((acc, s) => acc + (s.ram || 0), 0),
+            suspendedUsers: allUsers.filter(u => u.suspended).length,
+            suspendedServers: allServers.filter(s => s.suspended).length
         };
     },
     
     // Audit Log
     addAuditLog: (entry) => {
-        const logs = load(AUDIT_FILE);
-        logs.push({
-            id: Date.now().toString(),
+        const log = {
             timestamp: new Date().toISOString(),
             ...entry
-        });
+        };
+        audit.insert(log);
+        
         // Keep only last 1000 entries
-        if (logs.length > 1000) {
-            logs.splice(0, logs.length - 1000);
+        const all = audit.findAll();
+        if (all.length > 1000) {
+            all.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            const toDelete = all.slice(0, all.length - 1000);
+            toDelete.forEach(l => audit.delete(l.id));
         }
-        save(AUDIT_FILE, logs);
     },
     
     getAuditLogs: (options = {}) => {
-        let logs = load(AUDIT_FILE);
+        let logs = audit.findAll();
         
         if (options.userId) {
             logs = logs.filter(l => l.userId === options.userId);
@@ -163,194 +149,148 @@ export default {
     },
     
     // API Keys
-    getApiKeys: (userId) => load(APIKEYS_FILE).filter(k => k.userId === userId),
+    getApiKeys: (userId) => apikeys.find({ userId }),
     
-    getApiKeyByKey: (key) => load(APIKEYS_FILE).find(k => k.key === key),
+    getApiKeyByKey: (key) => apikeys.findOne({ key }),
     
-    createApiKey: (apiKey) => {
-        const keys = load(APIKEYS_FILE);
-        keys.push(apiKey);
-        save(APIKEYS_FILE, keys);
-    },
+    createApiKey: (apiKey) => apikeys.insert(apiKey),
     
     deleteApiKey: (id, userId) => {
-        const keys = load(APIKEYS_FILE).filter(k => !(k.id === id && k.userId === userId));
-        save(APIKEYS_FILE, keys);
+        const key = apikeys.findOne({ id, userId });
+        if (key) apikeys.delete(key.id);
     },
     
     updateApiKeyLastUsed: (id) => {
-        const keys = load(APIKEYS_FILE);
-        const index = keys.findIndex(k => k.id === id);
-        if (index !== -1) {
-            keys[index].lastUsed = new Date().toISOString();
-            save(APIKEYS_FILE, keys);
-        }
+        apikeys.update(id, { lastUsed: new Date().toISOString() });
     },
     
     // Scheduled Actions
-    getSchedules: () => load(SCHEDULES_FILE),
+    getSchedules: () => schedules.findAll(),
     
-    getServerSchedules: (serverId) => load(SCHEDULES_FILE).filter(s => s.serverId === serverId),
+    getServerSchedules: (serverId) => schedules.find({ serverId }),
     
-    getUserSchedules: (userId) => load(SCHEDULES_FILE).filter(s => s.userId === userId),
+    getUserSchedules: (userId) => schedules.find({ userId }),
     
-    addSchedule: (schedule) => {
-        const schedules = load(SCHEDULES_FILE);
-        schedules.push(schedule);
-        save(SCHEDULES_FILE, schedules);
-    },
+    addSchedule: (schedule) => schedules.insert(schedule),
     
     deleteSchedule: (id) => {
-        const schedules = load(SCHEDULES_FILE).filter(s => s.id !== id);
-        save(SCHEDULES_FILE, schedules);
+        schedules.delete(id);
     },
     
-    updateSchedule: (id, updates) => {
-        const schedules = load(SCHEDULES_FILE);
-        const index = schedules.findIndex(s => s.id === id);
-        if (index !== -1) {
-            schedules[index] = { ...schedules[index], ...updates };
-            save(SCHEDULES_FILE, schedules);
-            return schedules[index];
-        }
-        return null;
-    },
+    updateSchedule: (id, updates) => schedules.update(id, updates),
     
     // Webhooks
-    getWebhooks: (userId) => load(WEBHOOKS_FILE).filter(w => w.userId === userId),
+    getWebhooks: (userId) => webhooks.find({ userId }),
     
-    getAllWebhooks: () => load(WEBHOOKS_FILE),
+    getAllWebhooks: () => webhooks.findAll(),
     
-    getWebhooksByEvent: (event) => load(WEBHOOKS_FILE).filter(w => w.enabled && w.events.includes(event)),
-    
-    createWebhook: (webhook) => {
-        const webhooks = load(WEBHOOKS_FILE);
-        webhooks.push(webhook);
-        save(WEBHOOKS_FILE, webhooks);
+    getWebhooksByEvent: (event) => {
+        return webhooks.findAll().filter(w => w.enabled && w.events?.includes(event));
     },
     
+    createWebhook: (webhook) => webhooks.insert(webhook),
+    
     updateWebhook: (id, userId, updates) => {
-        const webhooks = load(WEBHOOKS_FILE);
-        const index = webhooks.findIndex(w => w.id === id && w.userId === userId);
-        if (index !== -1) {
-            webhooks[index] = { ...webhooks[index], ...updates };
-            save(WEBHOOKS_FILE, webhooks);
-            return webhooks[index];
+        const webhook = webhooks.findOne({ id, userId });
+        if (webhook) {
+            return webhooks.update(webhook.id, updates);
         }
         return null;
     },
     
     deleteWebhook: (id, userId) => {
-        const webhooks = load(WEBHOOKS_FILE).filter(w => !(w.id === id && w.userId === userId));
-        save(WEBHOOKS_FILE, webhooks);
+        const webhook = webhooks.findOne({ id, userId });
+        if (webhook) webhooks.delete(webhook.id);
     },
     
     // Alerts
-    getAlerts: (userId) => load(ALERTS_FILE).filter(a => a.userId === userId),
+    getAlerts: (userId) => alerts.find({ userId }),
     
-    getServerAlerts: (serverId) => load(ALERTS_FILE).filter(a => a.serverId === serverId && a.enabled),
+    getServerAlerts: (serverId) => alerts.find({ serverId, enabled: true }),
     
-    createAlert: (alert) => {
-        const alerts = load(ALERTS_FILE);
-        alerts.push(alert);
-        save(ALERTS_FILE, alerts);
-    },
+    createAlert: (alert) => alerts.insert(alert),
     
-    updateAlert: (id, updates) => {
-        const alerts = load(ALERTS_FILE);
-        const index = alerts.findIndex(a => a.id === id);
-        if (index !== -1) {
-            alerts[index] = { ...alerts[index], ...updates };
-            save(ALERTS_FILE, alerts);
-            return alerts[index];
-        }
-        return null;
-    },
+    updateAlert: (id, updates) => alerts.update(id, updates),
     
     deleteAlert: (id) => {
-        const alerts = load(ALERTS_FILE).filter(a => a.id !== id);
-        save(ALERTS_FILE, alerts);
+        alerts.delete(id);
     },
     
-    // Global Settings (maintenance mode, etc)
+    // Global Settings
     getSettings: () => {
-        try {
-            return load(SETTINGS_FILE);
-        } catch {
-            return {};
-        }
+        const doc = settings.findOne({ _type: 'global' });
+        return doc || {};
     },
     
     updateSettings: (updates) => {
-        const settings = load(SETTINGS_FILE);
-        const newSettings = { ...settings, ...updates };
-        save(SETTINGS_FILE, newSettings);
-        return newSettings;
+        const existing = settings.findOne({ _type: 'global' });
+        if (existing) {
+            return settings.update(existing.id, updates);
+        } else {
+            return settings.insert({ _type: 'global', ...updates });
+        }
     },
     
     // Metrics history
     getMetrics: (serverId) => {
-        const metrics = load(METRICS_FILE);
-        return metrics[serverId] || [];
+        const doc = metrics.findOne({ serverId });
+        return doc?.data || [];
     },
     
     addMetric: (serverId, metric) => {
-        const metrics = load(METRICS_FILE);
-        if (!metrics[serverId]) metrics[serverId] = [];
-        metrics[serverId].push({
+        let doc = metrics.findOne({ serverId });
+        const entry = {
             timestamp: new Date().toISOString(),
             ...metric
-        });
-        // Keep last 1440 entries (24 hours at 1 per minute)
-        if (metrics[serverId].length > 1440) {
-            metrics[serverId] = metrics[serverId].slice(-1440);
+        };
+        
+        if (!doc) {
+            metrics.insert({ serverId, data: [entry] });
+        } else {
+            let data = doc.data || [];
+            data.push(entry);
+            // Keep last 1440 entries (24 hours at 1 per minute)
+            if (data.length > 1440) {
+                data = data.slice(-1440);
+            }
+            metrics.update(doc.id, { data });
         }
-        save(METRICS_FILE, metrics);
     },
     
     clearMetrics: (serverId) => {
-        const metrics = load(METRICS_FILE);
-        delete metrics[serverId];
-        save(METRICS_FILE, metrics);
+        const doc = metrics.findOne({ serverId });
+        if (doc) metrics.delete(doc.id);
     },
     
     // Nodes
-    getNodes: () => load(NODES_FILE),
+    getNodes: () => nodes.findAll(),
     
-    getNode: (id) => load(NODES_FILE).find(n => n.id === id),
+    getNode: (id) => nodes.findById(id),
     
-    createNode: (node) => {
-        const nodes = load(NODES_FILE);
-        nodes.push(node);
-        save(NODES_FILE, nodes);
-        return node;
-    },
+    createNode: (node) => nodes.insert(node),
     
-    updateNode: (id, updates) => {
-        const nodes = load(NODES_FILE);
-        const index = nodes.findIndex(n => n.id === id);
-        if (index !== -1) {
-            nodes[index] = { ...nodes[index], ...updates };
-            save(NODES_FILE, nodes);
-            return nodes[index];
-        }
-        return null;
-    },
+    updateNode: (id, updates) => nodes.update(id, updates),
     
     deleteNode: (id) => {
-        const nodes = load(NODES_FILE).filter(n => n.id !== id);
-        save(NODES_FILE, nodes);
+        nodes.delete(id);
     },
     
-    getNodeServers: (nodeId) => load(SERVERS_FILE).filter(s => s.nodeId === nodeId),
+    getNodeServers: (nodeId) => servers.find({ nodeId }),
     
     getNodeUsage: (nodeId) => {
-        const servers = load(SERVERS_FILE).filter(s => s.nodeId === nodeId);
+        const nodeServers = servers.find({ nodeId });
         return {
-            ram: servers.reduce((acc, s) => acc + (s.ram || 0), 0),
-            disk: servers.reduce((acc, s) => acc + (parseInt((s.diskSize || '0G').replace('G', '')) || 0), 0),
-            cpu: servers.reduce((acc, s) => acc + (s.cpuCores || 1), 0),
-            count: servers.length
+            ram: nodeServers.reduce((acc, s) => acc + (s.ram || 0), 0),
+            disk: nodeServers.reduce((acc, s) => acc + (parseInt((s.diskSize || '0G').replace('G', '')) || 0), 0),
+            cpu: nodeServers.reduce((acc, s) => acc + (s.cpuCores || 1), 0),
+            count: nodeServers.length
         };
     },
+    
+    // Database management
+    compact: () => db.compact(),
+    close: () => db.close(),
+    
+    // Direct access for advanced queries
+    _db: db
 };
