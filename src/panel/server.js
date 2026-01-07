@@ -146,7 +146,13 @@ function isValidId(id) {
     return typeof id === 'string' && VALID_ID_REGEX.test(id) && id.length > 0 && id.length <= 64;
 }
 
+// Track viewers per server for subscription management (bandwidth optimization)
+const serverViewerCount = new Map(); // serverId -> { count, nodeId }
+
 io.on('connection', (socket) => {
+    // Track which servers this socket is viewing
+    socket.viewingServers = new Set();
+
     socket.on('join-server', async (serverId) => {
         if (!isValidId(serverId)) return;
         
@@ -158,12 +164,29 @@ io.on('connection', (socket) => {
         }
         
         socket.join(`server:${serverId}`);
+        socket.viewingServers.add(serverId);
         
         if (!serverData.nodeId) {
             return socket.emit('error', 'Server has no node assigned');
         }
         
         const client = nodeManager.getClient(serverData.nodeId);
+        
+        // Subscribe to vm-output if this is the first viewer
+        if (client && client.isConnected()) {
+            const viewerInfo = serverViewerCount.get(serverId) || { count: 0, nodeId: serverData.nodeId };
+            if (viewerInfo.count === 0) {
+                try {
+                    await client.subscribeVmOutput(serverId);
+                } catch (e) {
+                    log(`subscribeVmOutput failed: ${e.message}`);
+                }
+            }
+            viewerInfo.count++;
+            viewerInfo.nodeId = serverData.nodeId;
+            serverViewerCount.set(serverId, viewerInfo);
+        }
+        
         let status = 'stopped';
         if (client && client.isConnected()) {
             try {
@@ -199,9 +222,38 @@ io.on('connection', (socket) => {
     socket.on('leave-server', (serverId) => {
         if (!isValidId(serverId)) return;
         socket.leave(`server:${serverId}`);
+        socket.viewingServers.delete(serverId);
+        
+        // Unsubscribe if no more viewers
+        const viewerInfo = serverViewerCount.get(serverId);
+        if (viewerInfo) {
+            viewerInfo.count = Math.max(0, viewerInfo.count - 1);
+            if (viewerInfo.count === 0) {
+                const client = nodeManager.getClient(viewerInfo.nodeId);
+                if (client && client.isConnected()) {
+                    client.unsubscribeVmOutput(serverId).catch(() => {});
+                }
+                serverViewerCount.delete(serverId);
+            }
+        }
     });
     
-    socket.on('disconnect', () => {});
+    socket.on('disconnect', () => {
+        // Clean up all subscriptions for this socket
+        for (const serverId of socket.viewingServers) {
+            const viewerInfo = serverViewerCount.get(serverId);
+            if (viewerInfo) {
+                viewerInfo.count = Math.max(0, viewerInfo.count - 1);
+                if (viewerInfo.count === 0) {
+                    const client = nodeManager.getClient(viewerInfo.nodeId);
+                    if (client && client.isConnected()) {
+                        client.unsubscribeVmOutput(serverId).catch(() => {});
+                    }
+                    serverViewerCount.delete(serverId);
+                }
+            }
+        }
+    });
 });
 
 // VNC WebSocket proxy

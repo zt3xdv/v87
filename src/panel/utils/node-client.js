@@ -20,6 +20,11 @@ export class NodeClient extends EventEmitter {
         this.reconnectDelay = 5000;
         this.authFailed = false;
         this.pingInterval = null;
+        
+        // Bandwidth optimization: caching
+        this.statusCache = new Map(); // serverId -> { value, expiresAt, pendingPromise }
+        this.statsCache = new Map();
+        this.defaultCacheTtlMs = 2000; // 2s TTL
     }
 
     connect() {
@@ -31,7 +36,17 @@ export class NodeClient extends EventEmitter {
         this.authFailed = false;
 
         try {
-            this.ws = new WebSocket(this.url);
+            this.ws = new WebSocket(this.url, {
+                // Enable permessage-deflate compression
+                perMessageDeflate: {
+                    threshold: 512,
+                    clientNoContextTakeover: true,
+                    serverNoContextTakeover: true,
+                    zlibInflateOptions: {
+                        chunkSize: 16 * 1024
+                    }
+                }
+            });
         } catch (err) {
             this.emit('error', err);
             this.scheduleReconnect();
@@ -44,8 +59,13 @@ export class NodeClient extends EventEmitter {
             this.authenticate();
         });
 
-        this.ws.on('message', (data) => {
+        this.ws.on('message', (data, isBinary) => {
             try {
+                // Handle binary VNC frames
+                if (isBinary && Buffer.isBuffer(data)) {
+                    this.handleBinaryMessage(data);
+                    return;
+                }
                 const message = JSON.parse(data.toString());
                 this.handleMessage(message);
             } catch (err) {
@@ -132,6 +152,28 @@ export class NodeClient extends EventEmitter {
         }, delay);
     }
 
+    handleBinaryMessage(buffer) {
+        if (buffer.length < 1) return;
+        
+        const OPCODE_VNC_DATA = 0x01;
+        const OPCODE_VNC_DISCONNECTED = 0x02;
+        
+        const opcode = buffer.readUInt8(0);
+        const payload = buffer.subarray(1);
+
+        switch (opcode) {
+            case OPCODE_VNC_DATA:
+                // Emit raw binary VNC data (no base64 decoding needed)
+                this.emit('vnc-data', { data: payload });
+                break;
+            case OPCODE_VNC_DISCONNECTED:
+                this.emit('vnc-disconnected');
+                break;
+            default:
+                break;
+        }
+    }
+
     handleMessage(message) {
         const { type, id, payload } = message;
 
@@ -148,11 +190,25 @@ export class NodeClient extends EventEmitter {
             return;
         }
 
+        // Handle batched messages from daemon
+        if (type === 'batch' && payload?.messages && Array.isArray(payload.messages)) {
+            for (const inner of payload.messages) {
+                this.handleMessage(inner);
+            }
+            return;
+        }
+
         switch (type) {
             case 'vm-output':
                 this.emit('vm-output', payload.serverId, payload.data);
                 break;
             case 'vm-status':
+                // Update cache when we get pushed status
+                this.statusCache.set(payload.serverId, {
+                    value: { status: payload.status },
+                    expiresAt: Date.now() + this.defaultCacheTtlMs,
+                    pendingPromise: null
+                });
                 this.emit('vm-status', payload.serverId, payload.status);
                 break;
             case 'download-progress':
@@ -253,11 +309,69 @@ export class NodeClient extends EventEmitter {
     }
 
     async getVMStatus(serverId) {
-        return this.send('vm-status', { serverId });
+        const now = Date.now();
+        const cached = this.statusCache.get(serverId);
+
+        // Return cached value if still valid
+        if (cached && cached.expiresAt > now) {
+            if (cached.pendingPromise) return cached.pendingPromise;
+            return cached.value;
+        }
+
+        // Deduplicate concurrent requests
+        const promise = this.send('vm-status', { serverId })
+            .then((res) => {
+                this.statusCache.set(serverId, {
+                    value: res,
+                    expiresAt: Date.now() + this.defaultCacheTtlMs,
+                    pendingPromise: null
+                });
+                return res;
+            })
+            .catch((err) => {
+                this.statusCache.delete(serverId);
+                throw err;
+            });
+
+        this.statusCache.set(serverId, {
+            value: cached?.value,
+            expiresAt: now + this.defaultCacheTtlMs,
+            pendingPromise: promise
+        });
+
+        return promise;
     }
 
     async getVMStats(serverId) {
-        return this.send('vm-stats', { serverId });
+        const now = Date.now();
+        const cached = this.statsCache.get(serverId);
+
+        if (cached && cached.expiresAt > now) {
+            if (cached.pendingPromise) return cached.pendingPromise;
+            return cached.value;
+        }
+
+        const promise = this.send('vm-stats', { serverId })
+            .then((res) => {
+                this.statsCache.set(serverId, {
+                    value: res,
+                    expiresAt: Date.now() + this.defaultCacheTtlMs,
+                    pendingPromise: null
+                });
+                return res;
+            })
+            .catch((err) => {
+                this.statsCache.delete(serverId);
+                throw err;
+            });
+
+        this.statsCache.set(serverId, {
+            value: cached?.value,
+            expiresAt: now + this.defaultCacheTtlMs,
+            pendingPromise: promise
+        });
+
+        return promise;
     }
 
     async listVMs() {
@@ -271,11 +385,32 @@ export class NodeClient extends EventEmitter {
 
     sendVNCData(data) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-                type: 'vnc-data',
-                payload: { data }
-            }));
+            // Send VNC data as binary for efficiency
+            const OPCODE_VNC_DATA = 0x01;
+            let payload;
+            
+            if (Buffer.isBuffer(data)) {
+                payload = data;
+            } else if (typeof data === 'string') {
+                payload = Buffer.from(data, 'base64');
+            } else {
+                return;
+            }
+            
+            const buf = Buffer.alloc(1 + payload.length);
+            buf.writeUInt8(OPCODE_VNC_DATA, 0);
+            payload.copy(buf, 1);
+            this.ws.send(buf);
         }
+    }
+
+    // Subscription management for bandwidth optimization
+    async subscribeVmOutput(serverId) {
+        return this.send('subscribe-vm-output', { serverId });
+    }
+
+    async unsubscribeVmOutput(serverId) {
+        return this.send('unsubscribe-vm-output', { serverId });
     }
 
     // Disk operations

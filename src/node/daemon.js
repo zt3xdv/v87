@@ -24,14 +24,74 @@ export class NodeDaemon {
         this.imageManager = new ImageManager({
             dataDir: this.config.dataDir
         });
+
+        // Bandwidth optimization: batching, throttling, subscriptions
+        this.panelBatchQueue = [];
+        this.panelBatchTimer = null;
+        this.lastVmStatusByServer = new Map();
+        this.subscribedVmOutput = new Set(); // Only send output for subscribed VMs
         
         this.vmManager.on('vm-output', (serverId, data) => {
-            this.sendToPanel('vm-output', { serverId, data });
+            // Only queue if someone is watching this VM
+            if (this.subscribedVmOutput.has(serverId)) {
+                // Truncate very long output bursts to prevent flooding
+                const truncatedData = typeof data === 'string' && data.length > 4096 
+                    ? data.slice(0, 4096) 
+                    : data;
+                this.queuePanelEvent('vm-output', { serverId, data: truncatedData });
+            }
         });
         
         this.vmManager.on('vm-status', (serverId, status) => {
-            this.sendToPanel('vm-status', { serverId, status });
+            // Delta: only send if status changed
+            const prev = this.lastVmStatusByServer.get(serverId);
+            if (prev !== status) {
+                this.lastVmStatusByServer.set(serverId, status);
+                this.queuePanelEvent('vm-status', { serverId, status });
+            }
         });
+    }
+
+    queuePanelEvent(type, payload) {
+        const isHighPriority = (type === 'vm-status');
+        this.panelBatchQueue.push({ type, payload, priority: isHighPriority ? 1 : 0 });
+
+        if (!this.panelBatchTimer) {
+            // Batch for 20ms to reduce message count
+            this.panelBatchTimer = setTimeout(() => {
+                this.flushPanelBatch();
+            }, 20);
+        }
+    }
+
+    flushPanelBatch() {
+        this.panelBatchTimer = null;
+        
+        if (!this.panelConnection || this.panelConnection.readyState !== this.panelConnection.OPEN) {
+            this.panelBatchQueue = [];
+            return;
+        }
+
+        if (this.panelBatchQueue.length === 0) return;
+
+        // Cap batch size to prevent overwhelming the connection
+        const MAX_BATCH_MESSAGES = 500;
+        const batch = this.panelBatchQueue.slice(0, MAX_BATCH_MESSAGES);
+        this.panelBatchQueue = this.panelBatchQueue.slice(MAX_BATCH_MESSAGES);
+
+        // Sort by priority (status events first)
+        batch.sort((a, b) => b.priority - a.priority);
+
+        // Send batched message
+        this.panelConnection.send(JSON.stringify({
+            type: 'batch',
+            payload: { messages: batch.map(({ priority, ...m }) => m) }
+        }));
+
+        // If there are leftovers, schedule another flush
+        if (this.panelBatchQueue.length > 0 && !this.panelBatchTimer) {
+            this.panelBatchTimer = setTimeout(() => this.flushPanelBatch(), 5);
+        }
     }
 
     log(message) {
@@ -43,7 +103,16 @@ export class NodeDaemon {
     start() {
         this.wss = new WebSocketServer({
             port: this.config.port,
-            host: this.config.host
+            host: this.config.host,
+            // Enable permessage-deflate compression for bandwidth reduction
+            perMessageDeflate: {
+                threshold: 512, // Compress messages larger than 512 bytes
+                clientNoContextTakeover: true,
+                serverNoContextTakeover: true,
+                zlibDeflateOptions: {
+                    level: 6 // Balanced compression
+                }
+            }
         });
 
         this.wss.on('listening', () => {
@@ -178,6 +247,13 @@ export class NodeDaemon {
 
             case 'delete-snapshot':
                 return this.handleDeleteSnapshot(ws, id, payload);
+
+            // Subscription management for bandwidth optimization
+            case 'subscribe-vm-output':
+                return this.handleSubscribeVmOutput(ws, id, payload);
+
+            case 'unsubscribe-vm-output':
+                return this.handleUnsubscribeVmOutput(ws, id, payload);
 
             default:
                 return this.sendError(ws, id, `Unknown command: ${type}`);
@@ -442,17 +518,55 @@ export class NodeDaemon {
             ws.vncServerId = serverId;
             ws.vncSocket = vncSocket;
 
+            // VNC optimization: throttle to ~30fps, use binary frames
+            const OPCODE_VNC_DATA = 0x01;
+            const OPCODE_VNC_DISCONNECTED = 0x02;
+            const MIN_FRAME_INTERVAL_MS = 33; // ~30fps cap
+            
+            let vncPendingBuffer = Buffer.alloc(0);
+            let lastFrameTime = 0;
+            let frameTimer = null;
+
+            const sendVncFrame = () => {
+                frameTimer = null;
+                if (ws.readyState !== ws.OPEN) return;
+                if (vncPendingBuffer.length === 0) return;
+
+                const now = Date.now();
+                const elapsed = now - lastFrameTime;
+                
+                if (elapsed < MIN_FRAME_INTERVAL_MS) {
+                    // Schedule to send later
+                    if (!frameTimer) {
+                        frameTimer = setTimeout(sendVncFrame, MIN_FRAME_INTERVAL_MS - elapsed);
+                    }
+                    return;
+                }
+
+                lastFrameTime = now;
+                const frameData = vncPendingBuffer;
+                vncPendingBuffer = Buffer.alloc(0);
+
+                // Send as binary frame with opcode prefix (no base64 overhead)
+                const buf = Buffer.alloc(1 + frameData.length);
+                buf.writeUInt8(OPCODE_VNC_DATA, 0);
+                frameData.copy(buf, 1);
+                ws.send(buf);
+            };
+
             vncSocket.on('data', (data) => {
-                if (ws.readyState === ws.OPEN) {
-                    ws.send(JSON.stringify({
-                        type: 'vnc-data',
-                        payload: { data: data.toString('base64') }
-                    }));
+                vncPendingBuffer = Buffer.concat([vncPendingBuffer, data]);
+                if (!frameTimer) {
+                    sendVncFrame();
                 }
             });
 
             vncSocket.on('close', () => {
-                ws.send(JSON.stringify({ type: 'vnc-disconnected' }));
+                if (ws.readyState === ws.OPEN) {
+                    const buf = Buffer.alloc(1);
+                    buf.writeUInt8(OPCODE_VNC_DISCONNECTED, 0);
+                    ws.send(buf);
+                }
             });
 
             this.sendResponse(ws, id, 'vnc-connected', { serverId });
@@ -569,6 +683,24 @@ export class NodeDaemon {
         } catch (err) {
             this.sendError(ws, id, err.message);
         }
+    }
+
+    handleSubscribeVmOutput(ws, id, payload) {
+        const { serverId } = payload || {};
+        if (!serverId) {
+            return this.sendError(ws, id, 'serverId required');
+        }
+        this.subscribedVmOutput.add(serverId);
+        this.sendResponse(ws, id, 'subscribed-vm-output', { serverId });
+    }
+
+    handleUnsubscribeVmOutput(ws, id, payload) {
+        const { serverId } = payload || {};
+        if (!serverId) {
+            return this.sendError(ws, id, 'serverId required');
+        }
+        this.subscribedVmOutput.delete(serverId);
+        this.sendResponse(ws, id, 'unsubscribed-vm-output', { serverId });
     }
 
     sendResponse(ws, id, type, payload) {
