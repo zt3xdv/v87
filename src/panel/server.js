@@ -20,20 +20,37 @@ import { requireAuth, requireAdmin, invalidateUserTokens } from './utils/authMid
 import { NodeManager } from './utils/node-client.js';
 import { getImages, getImage } from './utils/images.js';
 
-const TERM_GRAY = "\x1b[90m";
-const TERM_RESET = "\x1b[0m";
+const c = {
+    reset: '\x1b[0m',
+    bold: '\x1b[1m',
+    dim: '\x1b[2m',
+    red: '\x1b[31m',
+    green: '\x1b[32m',
+    yellow: '\x1b[33m',
+    blue: '\x1b[34m',
+    magenta: '\x1b[35m',
+    cyan: '\x1b[36m'
+};
 
-function log(message) {
-    const now = new Date();
-    const d = String(now.getDate()).padStart(2, '0');
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const y = String(now.getFullYear()).slice(-2);
-    const H = String(now.getHours()).padStart(2, '0');
-    const M = String(now.getMinutes()).padStart(2, '0');
-    const S = String(now.getSeconds()).padStart(2, '0');
-    
-    console.log(`${TERM_GRAY}${H}:${M}:${S} ${d}/${m}/${y} ${TERM_RESET}${message}`);
+const symbols = {
+    info: `${c.blue}●${c.reset}`,
+    success: `${c.green}✓${c.reset}`,
+    warn: `${c.yellow}⚠${c.reset}`,
+    error: `${c.red}✗${c.reset}`,
+    arrow: `${c.cyan}→${c.reset}`
+};
+
+function getTimestamp() {
+    return new Date().toLocaleTimeString('en-US', { hour12: false });
 }
+
+function log(message, type = 'info') {
+    console.log(`  ${c.dim}${getTimestamp()}${c.reset}  ${symbols[type] || symbols.info}  ${message}`);
+}
+
+function logSuccess(message) { log(message, 'success'); }
+function logWarn(message) { log(message, 'warn'); }
+function logError(message) { log(message, 'error'); }
 
 // Rate limiting store
 const rateLimitStore = new Map();
@@ -71,12 +88,12 @@ let config;
 try {
     config = require('../../config.json');
 } catch (e) {
-    log('Error: config.json not found.');
+    logError('config.json not found');
     process.exit(1);
 }
 
 if (config.secretKey === 'v87-change-me-in-prod') {
-    log('\x1b[33mWARNING: Using default secretKey! Change it in config.json for production.\x1b[0m');
+    logWarn('Using default secretKey! Change it in config.json for production');
 }
 
 const nodeManager = new NodeManager();
@@ -90,25 +107,25 @@ function initializeNodes() {
                 url: node.url,
                 secret: node.secret
             });
-            log(`Connecting to node: ${node.name} (${node.id})`);
+            log(`Connecting to node ${c.cyan}${node.name}${c.reset}`);
         }
     }
 }
 
 nodeManager.on('node-connected', (nodeId) => {
     const node = db.getNode(nodeId);
-    log(`Node connected: ${node?.name || nodeId}`);
+    logSuccess(`Node connected: ${c.cyan}${node?.name || nodeId}${c.reset}`);
     db.updateNode(nodeId, { lastSeen: new Date().toISOString(), status: 'online' });
 });
 
 nodeManager.on('node-disconnected', (nodeId) => {
     const node = db.getNode(nodeId);
-    log(`Node disconnected: ${node?.name || nodeId}`);
+    logWarn(`Node disconnected: ${c.yellow}${node?.name || nodeId}${c.reset}`);
     db.updateNode(nodeId, { status: 'offline' });
 });
 
 nodeManager.on('node-error', (nodeId, err) => {
-    log(`Node error (${nodeId}): ${err.message}`);
+    logError(`Node ${c.red}${nodeId}${c.reset}: ${err.message}`);
 });
 
 nodeManager.on('vm-output', (nodeId, serverId, data) => {
@@ -2939,22 +2956,42 @@ app.use((req, res) => {
 // =====================
 
 process.on('SIGTERM', () => {
-    log('SIGTERM received, shutting down...');
+    console.log();
+    logWarn('Received SIGTERM, shutting down...');
     nodeManager.shutdown();
     server.close(() => {
+        logSuccess('Panel stopped');
+        console.log();
         process.exit(0);
     });
 });
 
 process.on('SIGINT', () => {
-    log('SIGINT received, shutting down...');
+    console.log();
+    logWarn('Received SIGINT, shutting down...');
     nodeManager.shutdown();
     server.close(() => {
+        logSuccess('Panel stopped');
+        console.log();
         process.exit(0);
     });
 });
 
+function printBanner() {
+    console.log();
+    console.log(`  ${c.bold}${c.cyan}V87${c.reset} ${c.dim}Panel Server${c.reset}`);
+    console.log(`  ${c.dim}────────────────────────────${c.reset}`);
+    console.log();
+    console.log(`  ${c.bold}Configuration${c.reset}`);
+    console.log(`  ${c.dim}─────────────────────────────${c.reset}`);
+    console.log(`  ${c.dim}Port${c.reset}      ${c.cyan}${PORT}${c.reset}`);
+    console.log(`  ${c.dim}Nodes${c.reset}     ${c.cyan}${db.getNodes().filter(n => n.enabled).length}${c.reset} ${c.dim}enabled${c.reset}`);
+    console.log();
+}
+
 server.listen(PORT, () => {
-    log(`V87 Panel running on port ${PORT}`);
+    printBanner();
+    logSuccess(`Listening on ${c.cyan}http://localhost:${PORT}${c.reset}`);
     initializeNodes();
+    console.log();
 });

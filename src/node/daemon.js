@@ -94,11 +94,16 @@ export class NodeDaemon {
         }
     }
 
-    log(message) {
-        const now = new Date();
-        const time = now.toTimeString().slice(0, 8);
-        console.log(`\x1b[90m${time}\x1b[0m ${message}`);
+    log(message, type = 'info') {
+        const c = { reset: '\x1b[0m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', blue: '\x1b[34m', cyan: '\x1b[36m' };
+        const symbols = { info: `${c.blue}●${c.reset}`, success: `${c.green}✓${c.reset}`, warn: `${c.yellow}⚠${c.reset}`, error: `${c.red}✗${c.reset}` };
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+        console.log(`  ${c.dim}${time}${c.reset}  ${symbols[type] || symbols.info}  ${message}`);
     }
+
+    logSuccess(msg) { this.log(msg, 'success'); }
+    logWarn(msg) { this.log(msg, 'warn'); }
+    logError(msg) { this.log(msg, 'error'); }
 
     start() {
         this.wss = new WebSocketServer({
@@ -116,18 +121,16 @@ export class NodeDaemon {
         });
 
         this.wss.on('listening', () => {
-            this.log(`v87-node listening on ${this.config.host}:${this.config.port}`);
-            this.log(`KVM: ${this.config.enableKvm ? 'enabled' : 'disabled'}`);
-            this.log(`Data dir: ${this.config.dataDir}`);
+            // Banner is printed by index.js
         });
 
         this.wss.on('connection', (ws, req) => {
-            this.log(`Connection from ${req.socket.remoteAddress}`);
+            this.log(`Panel connected from ${req.socket.remoteAddress}`);
             this.handleConnection(ws);
         });
 
         this.wss.on('error', (err) => {
-            this.log(`Server error: ${err.message}`);
+            this.logError(`Server error: ${err.message}`);
         });
     }
 
@@ -158,13 +161,13 @@ export class NodeDaemon {
         ws.on('close', () => {
             clearTimeout(authTimeout);
             if (ws.isPanel && ws === this.panelConnection) {
-                this.log('Panel disconnected');
+                this.logWarn('Panel disconnected');
                 this.panelConnection = null;
             }
         });
 
         ws.on('error', (err) => {
-            this.log(`WebSocket error: ${err.message}`);
+            this.logError(`WebSocket error: ${err.message}`);
         });
     }
 
@@ -281,7 +284,7 @@ export class NodeDaemon {
                 this.panelConnection.close(4002, 'Replaced by new panel connection');
             }
             this.panelConnection = ws;
-            this.log('Panel authenticated and connected');
+            this.logSuccess('Panel authenticated');
         }
 
         this.sendResponse(ws, id, 'auth-ok', {
@@ -376,7 +379,7 @@ export class NodeDaemon {
                     return this.sendError(ws, id, `Image ${imageId} not found and no URL provided`);
                 }
                 
-                this.log(`Image ${imageId} not found, downloading from ${imageUrl}...`);
+                this.log(`Downloading image ${imageId}`);
                 this.sendToPanel('vm-output', { 
                     serverId, 
                     data: `Downloading image ${imageName || imageId}...\r\n` 
@@ -404,7 +407,7 @@ export class NodeDaemon {
                     }
                 }
                 
-                this.log(`Image ${imageId} downloaded successfully`);
+                this.logSuccess(`Image ${imageId} downloaded`);
                 this.sendToPanel('vm-output', { 
                     serverId, 
                     data: `Image downloaded. Creating VM...\r\n` 
@@ -741,12 +744,13 @@ export class NodeDaemon {
     }
 
     shutdown() {
-        this.log('Shutting down VMs...');
+        this.logWarn('Shutting down VMs...');
         this.vmManager.shutdown();
         
         if (this.wss) {
             this.wss.close();
         }
+        this.logSuccess('Daemon stopped');
     }
 }
 
