@@ -38,12 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/zt3xdv/v87/main/setup.sh | bash
 
 Images are downloaded automatically via virt-builder:
 
-- **Fedora**: fedora-40, fedora-39
 - **Debian**: debian-12, debian-11, debian-13
-- **Ubuntu**: ubuntu-24.04, ubuntu-22.04
-- **CentOS**: centos-stream-9
-- **Rocky Linux**: rocky-9
-- **AlmaLinux**: alma-9
 - **Alpine**: alpine-3.19
 
 ## License

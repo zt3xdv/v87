@@ -1,8 +1,16 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fs from 'fs-extra';
 import { requireAuth, requireAdmin } from '../utils/authMiddleware.js';
 import { getImages, getImage } from '../utils/images.js';
 import { log } from '../utils/logger.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CONFIG_PATH = path.join(__dirname, '../../../config.json');
+
+function loadConfig() {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+}
 
 export function setupServerRoutes(app, db, nodeManager, io, DATA_DIR) {
     
@@ -11,7 +19,7 @@ export function setupServerRoutes(app, db, nodeManager, io, DATA_DIR) {
     }
 
     function getUserLimits(user) {
-        const config = require('../../../config.json');
+        const config = loadConfig();
         const base = config.limits || {
             maxServers: 3,
             maxRam: 4096,
@@ -47,7 +55,7 @@ export function setupServerRoutes(app, db, nodeManager, io, DATA_DIR) {
         const user = db.findUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
         
-        const config = require('../../../config.json');
+        const config = loadConfig();
         const servers = db.getUserServers(user.id);
         const userLimits = getUserLimits(user);
         
@@ -92,7 +100,7 @@ export function setupServerRoutes(app, db, nodeManager, io, DATA_DIR) {
 
     app.post('/api/server/create', requireAuth, async (req, res, next) => {
         try {
-            const config = require('../../../config.json');
+            const config = loadConfig();
             const { name, description, imageId, nodeId } = req.body;
             const user = db.findUserById(req.user.id);
             const servers = db.getUserServers(user.id);
